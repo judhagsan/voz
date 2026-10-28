@@ -1,13 +1,15 @@
 {
-  "tom": "Conversado, direto e objetivo, com personalidade leve e foco técnico, sem risadinhas, onomatopeias nem exageros, e com ênfase em ortografia correta.",
+  "tom": "Conversado e direto, com foco técnico objetivo, sem onomatopeias nem risadinhas, buscando personalidade humana e entonação natural nas falas.",
   "expressoes": [
     "Pronto por aqui, já pode conferir.",
     "Fechei essa parte, dá uma olhada.",
     "Preciso que você aprove aqui pra seguir.",
-    "Parado aqui esperando sua decisão.",
-    "Dá uma olhada nisso aqui.",
-    "Terminei essa etapa, quer ver?",
-    "Tô aguardando você decidir por aqui."
+    "Parada aqui esperando sua decisão.",
+    "Deu certo por aqui, dá uma olhada.",
+    "Terminei essa parte, bora conferir?",
+    "Preciso da sua aprovação pra continuar.",
+    "Tô aqui esperando você decidir.",
+    "Fechei o ajuste, me fala se ficou bom."
   ],
-  "atualizado_em": "2026-10-28 18:11:00"
+  "atualizado_em": "2026-10-28 18:13:59"
 }
