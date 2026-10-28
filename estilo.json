@@ -1,16 +1,13 @@
 {
-  "tom": "Sério, calmo e direto, com foco técnico objetivo, tom humano e sem exageros nem gírias.",
+  "tom": "Conversado, direto e objetivo, com personalidade leve e foco técnico, sem risadinhas, onomatopeias nem exageros, e com ênfase em ortografia correta.",
   "expressoes": [
-    "tudo pronto",
-    "concluído por aqui",
-    "pode revisar",
-    "preciso da sua confirmação",
-    "aguardando sua decisão",
-    "Verificação concluída sem pendências.",
-    "Aguardo sua autorização para continuar.",
-    "Ação pausada até a sua resposta.",
-    "Resultado disponível para análise.",
-    "Revisão feita, nada pendente por aqui."
+    "Pronto por aqui, já pode conferir.",
+    "Fechei essa parte, dá uma olhada.",
+    "Preciso que você aprove aqui pra seguir.",
+    "Parado aqui esperando sua decisão.",
+    "Dá uma olhada nisso aqui.",
+    "Terminei essa etapa, quer ver?",
+    "Tô aguardando você decidir por aqui."
   ],
-  "atualizado_em": "2026-10-28 18:00:34"
+  "atualizado_em": "2026-10-28 18:11:00"
 }
