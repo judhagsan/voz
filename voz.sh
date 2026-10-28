@@ -76,7 +76,7 @@ fi
 
 if [ -n "$VOZ_SIMULAR" ]; then
   echo "${escolhido:-say: $reserva}"
-elif [ -z "$escolhido" ] || ! afplay "$escolhido" 2>/dev/null; then
-  say -v "Luciana (Enhanced)" "$reserva" 2>/dev/null || say "$reserva" 2>/dev/null
+else
+  /usr/bin/python3 -I "$BASE/comum.py" tocar "$escolhido" "$reserva"
 fi
 exit 0

@@ -1,0 +1,143 @@
+{
+  "atualizado_em": "2026-10-28 18:50:29",
+  "total": 7,
+  "itens": [
+    {
+      "arquivo": "sons/espera/Parada aqui esperando você me dizer..mp3",
+      "tipo": "som",
+      "escopo": "espera",
+      "texto": "Parada aqui esperando você me dizer.",
+      "normalizado": "parada aqui esperando você me dizer",
+      "palavras": [
+        "parada",
+        "esperando",
+        "dizer"
+      ],
+      "bytes": 43094
+    },
+    {
+      "arquivo": "sons/permissao/Preciso que você aprove aqui pra seguir..mp3",
+      "tipo": "som",
+      "escopo": "permissao",
+      "texto": "Preciso que você aprove aqui pra seguir.",
+      "normalizado": "preciso que você aprove aqui pra seguir",
+      "palavras": [
+        "preciso",
+        "aprove",
+        "seguir"
+      ],
+      "bytes": 44348
+    },
+    {
+      "arquivo": "sons/terminei/Pronto por aqui, já pode conferir!.mp3",
+      "tipo": "som",
+      "escopo": "terminei",
+      "texto": "Pronto por aqui, já pode conferir!",
+      "normalizado": "pronto por aqui já pode conferir",
+      "palavras": [
+        "pronto",
+        "pode",
+        "conferir"
+      ],
+      "bytes": 43094
+    },
+    {
+      "arquivo": "narracoes/geral/2026-10-28_181737.mp3",
+      "tipo": "narracao",
+      "escopo": "geral",
+      "texto": "Pronto por aqui no projeto da voz! Ajustei o timbre da Laura para ficar mais grave e limpei as narrações antigas, já pode ouvir.",
+      "normalizado": "pronto por aqui no projeto da voz ajustei o timbre da laura para ficar mais grave e limpei as narrações antigas já pode ouvir",
+      "palavras": [
+        "pronto",
+        "projeto",
+        "voz",
+        "ajustei",
+        "timbre",
+        "laura",
+        "ficar",
+        "grave",
+        "limpei",
+        "narracoes",
+        "antigas",
+        "pode",
+        "ouvir"
+      ],
+      "bytes": 130448,
+      "criado_em": "2026-10-28 18:17"
+    },
+    {
+      "arquivo": "narracoes/geral/2026-10-28_181854.mp3",
+      "tipo": "narracao",
+      "escopo": "geral",
+      "texto": "No Antigravity do projeto da voz, deixei o aviso de permissão só para comandos que realmente pedem sua aprovação, e a Laura ficou um pouco mais grave. Falta sua ordem pra aplicar.",
+      "normalizado": "no antigravity do projeto da voz deixei o aviso de permissão só para comandos que realmente pedem sua aprovação e a laura ficou um pouco mais grave falta sua ordem pra aplicar",
+      "palavras": [
+        "antigravity",
+        "projeto",
+        "voz",
+        "deixei",
+        "aviso",
+        "permissao",
+        "so",
+        "comandos",
+        "realmente",
+        "pedem",
+        "aprovacao",
+        "laura",
+        "ficou",
+        "pouco",
+        "grave",
+        "falta",
+        "ordem",
+        "aplicar"
+      ],
+      "bytes": 186872,
+      "criado_em": "2026-10-28 18:18"
+    },
+    {
+      "arquivo": "narracoes/geral/2026-10-28_184546.mp3",
+      "tipo": "narracao",
+      "escopo": "geral",
+      "texto": "No projeto da voz, pronto por aqui! Agora o sistema reaproveita os áudios já gravados e só gasta crédito quando nenhum serve.",
+      "normalizado": "no projeto da voz pronto por aqui agora o sistema reaproveita os áudios já gravados e só gasta crédito quando nenhum serve",
+      "palavras": [
+        "projeto",
+        "voz",
+        "pronto",
+        "agora",
+        "sistema",
+        "reaproveita",
+        "audios",
+        "gravados",
+        "so",
+        "gasta",
+        "credito",
+        "nenhum",
+        "serve"
+      ],
+      "bytes": 148420,
+      "criado_em": "2026-10-28 18:45"
+    },
+    {
+      "arquivo": "narracoes/pindorama/2026-10-28_184645.mp3",
+      "tipo": "narracao",
+      "escopo": "pindorama",
+      "texto": "No Pindorama, commit feito e testes verdes. Pra enviar e atualizar o PR, é só mandar.",
+      "normalizado": "no pindorama commit feito e testes verdes pra enviar e atualizar o pr é só mandar",
+      "palavras": [
+        "pindorama",
+        "commit",
+        "feito",
+        "testes",
+        "verdes",
+        "enviar",
+        "atualizar",
+        "pr",
+        "so",
+        "mandar"
+      ],
+      "bytes": 116655,
+      "criado_em": "2026-10-28 18:46"
+    }
+  ]
+}

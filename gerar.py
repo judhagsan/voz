@@ -21,9 +21,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from comum import (  # noqa: E402
-    BLOQUEIO, ESTADO, LOG, SONS, TAGS, BASE, api_bloqueada, carregar_config, carregar_estilo, chamar_claude,
-    chave_api, log, mensagens_do_usuario, normalizar, requisicao, salvar_config, salvar_estilo, sem_tags,
-    sincronizar_git, sintetizar,
+    BLOQUEIO, ESTADO, LOG, SONS, TAGS, BASE, api_bloqueada, buscar_audio_existente, carregar_config,
+    carregar_estilo, chamar_claude, chave_api, log, mensagens_do_usuario, normalizar, requisicao,
+    salvar_config, salvar_estilo, sem_tags, sincronizar_catalogo, sincronizar_git, sintetizar,
 )
 
 HISTORICO = BASE / "historico.tsv"
@@ -60,21 +60,21 @@ def montar_pedido(mensagens, existentes, categorias, estilo):
     return f"""Você escreve frases curtas que uma assistente de programação fala em voz alta para o usuário, em momentos diferentes:
 {momentos}
 
-Abaixo estão o perfil de estilo acumulado do usuário e mensagens recentes dele. Use-os para captar e evoluir o jeito dele de falar (gírias, tom, humor) e o universo de programação dele. Não copie trechos literais longos e não cite nomes de pessoas, projetos, arquivos ou segredos.
+Abaixo estão o perfil de estilo acumulado do usuário e mensagens recentes dele. Use-os para captar o vocabulário técnico e a objetividade dele. Não copie trechos literais longos e não cite nomes de pessoas, projetos, arquivos ou segredos.
 
-Regras para cada frase:
-- português do Brasil falado, de 1 a 8 palavras, no máximo 50 caracteres sem contar as tags;
-- informal e com personalidade, no tom das frases que já existem; pode ser uma piada leve; nada formal ou genérico como "Acabei o que você pediu";
-- pode ter no máximo uma tag de emoção do ElevenLabs entre colchetes, em inglês, como {TAGS};
-- escrita como deve ser falada, sem abreviações que a voz leria errado (nada de "vc", "n", "pq");
-- ortografia e acentuação sempre corretas, mesmo que as mensagens do usuário tenham erros de digitação: copie o tom dele, não os erros (formas faladas como "tô", "tá" e "pra" podem);
-- nada ofensivo;
+Regras obrigatórias para cada frase:
+- português do Brasil falado e fluido, de 3 a 8 palavras, no máximo 50 caracteres;
+- tom conversado, calmo, expressivo e próximo (como uma parceira de programação com boa entonação e espaço para gracejos sutis, bom humor leve e tiradas discretas, usando vírgulas, interrogações ou exclamações suaves para dar cadência humana à fala);
+- NUNCA escreva frases burocráticas, robóticas ou engessadas de telemarketing como "Concluí a tarefa solicitada" ou "Aguardo sua resposta para continuar"; prefira falas naturais e com charme discreto como "Pronto por aqui, já pode conferir!", "Fechei essa parte, dá uma olhada.", "Preciso que você aprove aqui pra seguir.", "Parada aqui esperando você me dizer.";
+- PROIBIDO usar tags entre colchetes (nada de [laughs], [chuckles], [sighs], etc.), risadinhas soltas ou onomatopeias ("psiu", "shh", "hm", "haha", "rs", "kk"); o gracejo deve vir na escolha espirituosa e controlada das palavras, nunca em risadas forçadas;
+- NUNCA use palavras com erro de digitação ou grafia errada: revise e corrija 100% da ortografia e acentuação padrão do português antes de devolver (contrações faladas naturais como "tô", "tá" e "pra" são bem-vindas);
+- escrita como deve ser falada, sem abreviações ("vc", "n", "pq", "tb", "blz") e sem "ok";
 - diferente das frases que já existem;
 - precisa fazer sentido em qualquer situação daquele momento.
 
 Além das frases, devolva também:
-- "tom": resumo curto atualizado (até 25 palavras) do estilo, humor e jeito de conversar do usuário;
-- "novas_expressoes": lista de até 5 gírias, interjeições ou termos recorrentes do jeito dele (já escritos por extenso como devem ser falados).
+- "tom": resumo curto atualizado (até 25 palavras) do estilo de trabalho e conversa do usuário (com ortografia 100% revisada);
+- "novas_expressoes": lista de até 5 expressões faladas naturais e com personalidade em português correto (sem onomatopeias, sem "psiu" e sem erros de digitação).
 
 Perfil acumulado do usuário:
 {perfil}
@@ -88,15 +88,26 @@ Mensagens recentes do usuário:
 Responda só com um JSON neste formato, sem mais nada: {{{exemplo}}}"""
 
 
+PROIBIDAS = {
+    "psiu", "vc", "pq", "tb", "blz", "vlw", "flw", "shh", "hm",
+    "haha", "hehe", "kkk", "rs", "ok",
+}
+
+
+def tem_palavra_proibida(texto):
+    palavras = set(normalizar(texto).split())
+    return bool(palavras & PROIBIDAS)
+
+
 def atualizar_estilo(estilo, propostas):
-    tom = str(propostas.get("tom", "")).strip()
+    tom = sem_tags(str(propostas.get("tom", ""))).strip()
     if tom:
         estilo["tom"] = tom[:200]
-    atuais = list(estilo.get("expressoes", []))
+    atuais = [e for e in estilo.get("expressoes", []) if not tem_palavra_proibida(e)]
     vistas = {normalizar(e) for e in atuais}
     for exp in propostas.get("novas_expressoes") or []:
-        exp = str(exp).strip()
-        if 1 < len(exp) <= 40 and normalizar(exp) not in vistas:
+        exp = sem_tags(str(exp)).strip()
+        if 1 < len(exp) <= 40 and not tem_palavra_proibida(exp) and normalizar(exp) not in vistas:
             atuais.append(exp)
             vistas.add(normalizar(exp))
     estilo["expressoes"] = atuais[-100:]
@@ -110,17 +121,27 @@ def pedir_frases(cfg, mensagens, existentes, categorias):
     atualizar_estilo(estilo, propostas)
     aprovadas = {}
     for c in categorias:
-        frase = str(propostas.get(c, "")).strip()
-        falada = sem_tags(frase)
+        falada = sem_tags(str(propostas.get(c, ""))).strip()
         vistas = {normalizar(f) for f in existentes[c]}
-        if 0 < len(falada) <= 50 and len(falada.split()) <= 8 and normalizar(frase) not in vistas:
-            aprovadas[c] = frase
-        elif frase:
-            log("descartada (%s): %s" % (c, frase))
+        if (
+            0 < len(falada) <= 50
+            and len(falada.split()) <= 8
+            and not tem_palavra_proibida(falada)
+            and normalizar(falada) not in vistas
+        ):
+            aprovadas[c] = falada
+        elif falada:
+            log("descartada (%s): %s" % (c, falada))
     return aprovadas
 
 
 def salvar_frase(cfg, chave, categoria, frase):
+    arq_existente, txt_existente, nota = buscar_audio_existente(
+        frase, escopo=categoria, tipo="som", limiar=0.80
+    )
+    if arq_existente:
+        log("frase já coberta pelo catálogo (%s, nota %.2f): %s -> %s" % (categoria, nota, frase, txt_existente))
+        return
     audio = sintetizar(cfg, chave, frase)
     nome = re.sub(r'[/:\\"]', "-", frase)
     destino = SONS / categoria / (nome + ".mp3")
@@ -131,6 +152,7 @@ def salvar_frase(cfg, chave, categoria, frase):
     destino.write_bytes(audio)
     with HISTORICO.open("a", encoding="utf-8") as h:
         h.write("%s\t%s\t%s\t%s\n" % (time.strftime("%Y-%m-%d"), categoria, frase, destino.name))
+    sincronizar_catalogo()
     log("nova (%s): %s" % (categoria, frase))
 
 
