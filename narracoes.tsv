@@ -25,3 +25,5 @@
 2026-10-28 20:18	pindorama	2026-10-28_201819.mp3	No Pindorama, corrigi os testes pra não mexerem mais no seu Keychain. Tudo passou, ainda não commitei. Me conta se a janela apareceu.
 2026-10-28 20:20	geral	2026-10-28_202006.mp3	Isso mesmo, no Voz nada seu vai pro repositório. A chave fica só no chaveiro do macOS da sua máquina.
 2026-10-28 20:21	geral	2026-10-28_202101.mp3	Aqui no Voz, o instalador, o README e o ajuste de branch tão prontos e validados. Quer que eu faça commit e push?
+2026-10-28 20:23	geral	2026-10-28_202301.mp3	Aqui no Voz, o instalador e o painel já estão no GitHub, na branch principal. Pronto pra você conferir.
+2026-10-28 20:24	pindorama	2026-10-28_202434.mp3	No Pindorama, o render tá corrigido e testado. As autorizações do Keychain ficam com você, porque apagar pelo terminal derrubaria seu login.

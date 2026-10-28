@@ -1,6 +1,6 @@
 {
-  "atualizado_em": "2026-10-28 20:22:35",
-  "total": 30,
+  "atualizado_em": "2026-10-28 20:25:14",
+  "total": 32,
   "itens": [
     {
       "arquivo": "sons/espera/Parada aqui esperando você me dizer..mp3",
@@ -704,6 +704,49 @@
       ],
       "bytes": 142987,
       "criado_em": "2026-10-28 20:21"
+    },
+    {
+      "arquivo": "narracoes/geral/2026-10-28_202301.mp3",
+      "tipo": "narracao",
+      "escopo": "geral",
+      "texto": "Aqui no Voz, o instalador e o painel já estão no GitHub, na branch principal. Pronto pra você conferir.",
+      "normalizado": "aqui no voz o instalador e o painel já estão no github na branch principal pronto pra você conferir",
+      "palavras": [
+        "voz",
+        "instalador",
+        "painel",
+        "estao",
+        "github",
+        "branch",
+        "principal",
+        "pronto",
+        "conferir"
+      ],
+      "bytes": 116237,
+      "criado_em": "2026-10-28 20:23"
+    },
+    {
+      "arquivo": "narracoes/pindorama/2026-10-28_202434.mp3",
+      "tipo": "narracao",
+      "escopo": "pindorama",
+      "texto": "No Pindorama, o render tá corrigido e testado. As autorizações do Keychain ficam com você, porque apagar pelo terminal derrubaria seu login.",
+      "normalizado": "no pindorama o render tá corrigido e testado as autorizações do keychain ficam com você porque apagar pelo terminal derrubaria seu login",
+      "palavras": [
+        "pindorama",
+        "render",
+        "corrigido",
+        "testado",
+        "autorizacoes",
+        "keychain",
+        "ficam",
+        "porque",
+        "apagar",
+        "terminal",
+        "derrubaria",
+        "login"
+      ],
+      "bytes": 165556,
+      "criado_em": "2026-10-28 20:24"
     }
   ]
 }
