@@ -402,8 +402,15 @@ def sincronizar_git(cfg, forcar=False):
         log("git commit ignorado: " + (r_commit.stderr or r_commit.stdout).strip()[:200])
         return False
 
+    r_branch = subprocess.run(
+        ["git", "-C", str(BASE), "symbolic-ref", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    branch = r_branch.stdout.strip() if r_branch.returncode == 0 and r_branch.stdout.strip() else "main"
+
     r_push = subprocess.run(
-        ["git", "-C", str(BASE), "push", "origin", "main"],
+        ["git", "-C", str(BASE), "push", "-u", "origin", branch],
         capture_output=True,
         text=True,
         timeout=60,
@@ -411,7 +418,7 @@ def sincronizar_git(cfg, forcar=False):
     if r_push.returncode != 0:
         log("git push falhou: " + (r_push.stderr or r_push.stdout).strip()[:200])
         return False
-    log("git sync: alterações do banco enviadas para origin/main")
+    log(f"git sync: alterações do banco enviadas para origin/{branch}")
     return True
 
 

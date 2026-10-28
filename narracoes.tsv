@@ -14,3 +14,14 @@
 2026-10-28 19:16	geral	2026-10-28_191630.mp3	Aqui no Voz, a Laura fala uma vez ao abrir o painel, sem flag. No tmux, sugeri atalhos pra divisão independente. Aguardo sua aprovação.
 2026-10-28 19:20	geral	2026-10-28_192048.mp3	Pronto, aqui no Voz: a Laura agora fala uma vez ao abrir o painel, sem precisar de flag. O quadro segue atualizando normalmente.
 2026-10-28 19:29	grao	2026-10-28_192949.mp3	No Grão, as orbs ganharam o visual dos vídeos e o loop fecha sem salto. Nada foi commitado, e ainda não vi no jogo.
+2026-10-28 19:33	geral	2026-10-28_193329.mp3	Aqui no Voz, o commit do painel foi feito, e a base diária segue sincronizando sozinha. Quer que eu envie pro GitHub agora?
+2026-10-28 20:00	geral	2026-10-28_200029.mp3	Aqui no Voz, propus um instalador de um comando e um ajuste pra qualquer fork ou branch. Tô esperando sua aprovação pra seguir.
+2026-10-28 20:05	geral	2026-10-28_200535.mp3	Aqui no Voz, só você consegue dar push na sua main, e o ffmpeg é opcional. Aguardo sua aprovação pra criar o instalador.
+2026-10-28 20:06	geral	2026-10-28_200650.mp3	Aqui no Voz, o ffmpeg vira obrigatório pra manter o pitch da Laura sempre igual. Posso criar o instalador e o README agora?
+2026-10-28 20:11	geral	2026-10-28_201110.mp3	Aqui no Voz, o instalador e o README tão prontos, e a ferramenta de áudio virou obrigatória pra manter o timbre da Laura igual.
+2026-10-28 20:13	pindorama	2026-10-28_201308.mp3	No Pindorama, achei a causa dos dois defeitos, mas ainda não mexi em nada. Posso aplicar a correção quando você aprovar.
+2026-10-28 20:16	pindorama	2026-10-28_201637.mp3	No Pindorama, achei o motivo da janela: os testes mexiam nas suas credenciais de verdade. Posso aplicar a correção?
+2026-10-28 20:17	geral	2026-10-28_201705.mp3	Aqui no Voz, você não precisa de fork, são três comandos no terminal. Posso ajustar o instalador pra detectar sua conta. Aguardo sua aprovação.
+2026-10-28 20:18	pindorama	2026-10-28_201819.mp3	No Pindorama, corrigi os testes pra não mexerem mais no seu Keychain. Tudo passou, ainda não commitei. Me conta se a janela apareceu.
+2026-10-28 20:20	geral	2026-10-28_202006.mp3	Isso mesmo, no Voz nada seu vai pro repositório. A chave fica só no chaveiro do macOS da sua máquina.
+2026-10-28 20:21	geral	2026-10-28_202101.mp3	Aqui no Voz, o instalador, o README e o ajuste de branch tão prontos e validados. Quer que eu faça commit e push?

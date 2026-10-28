@@ -1,145 +1,164 @@
-# Aracuan
+# Voz
 
-Sistema de avisos de voz, narração de tarefas longas e aprendizado contínuo de vocabulário para agentes de código (**Claude Code** e **Antigravity**) no macOS, usando síntese neural da **ElevenLabs**.
-
----
-
-## Como funciona
-
-O **Aracuan** atua por eventos nos hooks dos agentes (zero consumo em segundo plano enquanto você programa) e opera em 3 frentes:
-
-1. **Sorteio inteligente de avisos (`voz.sh`):**
-   - **`terminei`**: quando o agente conclui uma tarefa.
-   - **`permissao`**: quando o agente pede aprovação para rodar uma ferramenta ou comando.
-   - **`espera`**: quando o agente aguarda uma resposta ou decisão sua.
-   - Evita repetir a última frase tocada e possui fallback automático: `.mp3` locais $\rightarrow$ voz offline do macOS (`say`).
-
-2. **Narração de tarefas longas (`narrar.py`):**
-   - Quando uma tarefa passa do tempo mínimo configurado (`45s`), lê o pedido e o resultado final da sessão, gera uma fala curta e bem-humorada contando o que realmente ficou pronto e sintetiza o áudio na hora (guardando tudo catalogado em `narracoes/` e `narracoes.tsv`).
-   - Se a API estiver sem cota, offline ou em pausa, cai imediatamente para os áudios gravados em `sons/`.
-
-3. **Enriquecimento contínuo de vocabulário e estilo (`gerar.py` + `estilo.json`):**
-   - Aprende o jeito de falar, humor, gírias e expressões do usuário a partir das conversas nos agentes, acumulando o perfil em `estilo.json`.
-   - Gera periodicamente novas frases curtas com tags de entonação (`[laughs]`, `[sighs]`, `[excited]`, etc.), sintetiza na ElevenLabs e adiciona ao banco permanente (`sons/` e `historico.tsv`).
+Sistema de avisos falados, narração contextual por projeto, painel visual de repositórios no terminal e aprendizado contínuo de vocabulário no macOS, usando síntese neural da **ElevenLabs** e ajuste de timbre via **ffmpeg**.
 
 ---
 
-## Estrutura do projeto
+## O que o projeto faz
 
-| Arquivo / Pasta | Descrição |
-|---|---|
-| `voz.sh` | Script principal chamado pelos hooks do Claude Code e do Antigravity (`--agy`). |
-| `comum.py` | Funções compartilhadas: cliente ElevenLabs, acesso ao Keychain, leitura de transcripts e perfil de estilo. |
-| `gerar.py` | Gerador de novas frases de sorteio e atualizador do perfil de estilo (`estilo.json`). |
-| `narrar.py` | Narrador contextual para tarefas longas. |
-| `config.json` | Configurações de voz, modelo (`eleven_v4`), intervalos e limites de orçamento. |
-| `estilo.json` | Perfil persistente de tom e expressões aprendidas do usuário. |
-| `historico.tsv` | Base catalogada de todas as frases geradas por categoria. |
-| `narracoes.tsv` | Índice histórico das narrações de tarefas longas por projeto. |
-| `sons/` | Banco de áudios `.mp3` separados em `terminei/`, `permissao/` e `espera/`. |
+1. **Painel visual de repositórios no terminal (`voz` / `painel.py`):**
+   - Mostra em uma tabela rápida todos os repositórios locais e o estado remoto no GitHub:
+     - **Andamento local:** branch ativa e quantidade de arquivos modificados;
+     - **Sem push:** quantos commits locais ainda não foram enviados ao remoto (`↑`) ou faltam puxar (`↓`);
+     - **PR aberto:** número dos Pull Requests abertos no repositório (`PR #N`).
+   - No modo contínuo (`voz -w`), atualiza a tabela automaticamente na tela e fala um resumo inicial das pendências uma única vez ao abrir.
+
+2. **Narração contextual e fila sem sobreposição (`narrar.py` + `comum.py`):**
+   - Ao concluir uma tarefa, identifica o repositório/projeto e resume em voz alta o que foi feito, proposto ou explicado.
+   - Possui **fila global com trava (`flock`)**: quando vários agentes rodam em paralelo em projetos diferentes, as vozes nunca se atropelam — ou tocam em fila ordenada, ou juntam os resultados em uma única fala identificando cada repositório.
+
+3. **Catálogo verificado e economia de créditos (`catalogo.json`):**
+   - Cruza todos os arquivos `.mp3` existentes em `sons/` e `narracoes/` com seus textos e palavras-chave.
+   - Antes de sintetizar qualquer áudio novo na ElevenLabs, verifica se já existe uma gravação compatível no catálogo para reutilizá-la sem gastar créditos.
+
+4. **Avisos rápidos e aprendizado de estilo (`voz.sh` + `gerar.py` + `estilo.json`):**
+   - Avisos para `terminei`, `permissao` (apenas quando um comando realmente aguarda aprovação manual) e `espera`.
+   - Aprende expressões e estilo de comunicação ao longo do uso e sincroniza automaticamente o banco de áudios com o repositório.
 
 ---
 
-## Configuração da chave da ElevenLabs (Keychain do macOS)
+## Pré-requisitos
 
-A chave da API nunca fica salva em texto puro no repositório. Ela é lida diretamente do Keychain do macOS:
+- **macOS** (usa `afplay` e `security` nativos do sistema)
+- **ffmpeg** (prioritário/obrigatório para manter o tom `0.90` e a cadência `0.91` da voz sempre idênticos)
+- **GitHub CLI (`gh`)** (para consultar Pull Requests abertos e sincronizar seu fork)
 
-```bash
+---
+
+## 1. Instalação via Terminal
+
+Para instalar direto no terminal (já garante o `ffmpeg`, clona em `~/.claude/voz`, cria o comando `voz` em `~/.local/bin/voz` e configura os hooks):
+
+```zsh
+curl -fsSL https://raw.githubusercontent.com/judhagsan/voz/main/instalar.sh | bash
+```
+
+Ou, se já tiver clonado o repositório manualmente:
+
+```zsh
+chmod +x ~/.claude/voz/instalar.sh && ~/.claude/voz/instalar.sh
+```
+
+Depois de instalar, recarregue o shell:
+
+```zsh
+source ~/.zshrc
+```
+
+---
+
+## 2. Como conectar a API da ElevenLabs
+
+A chave da API nunca fica salva em arquivos do repositório — ela é guardada com segurança no **Keychain do macOS**.
+
+1. Crie uma chave de API na sua conta da ElevenLabs (com permissão de *Text to Speech*).
+2. Salve a chave no Keychain rodando no terminal (substitua `SUA_CHAVE_AQUI` pela sua chave):
+
+```zsh
 security add-generic-password -U -a "$USER" -s "elevenlabs-api-key" -w "SUA_CHAVE_AQUI"
 ```
 
-Para validar a voz, o modelo e o orçamento da conta:
+Para testar se a chave foi reconhecida:
 
-```bash
-python3 ~/.claude/voz/gerar.py configurar
+```zsh
+security find-generic-password -s "elevenlabs-api-key" -w
 ```
 
 ---
 
-## Integração nos agentes
+## 3. Como conectar o GitHub
 
-### Claude Code (`~/.claude/settings.json`)
+### Caso 1: Instalando na sua própria máquina (dono do repositório)
 
-```json
-{
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/Users/seu-usuario/.claude/voz/voz.sh terminei",
-            "async": true,
-            "timeout": 90
-          }
-        ]
-      }
-    ],
-    "Notification": [
-      {
-        "matcher": "permission_prompt|elicitation_dialog",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/Users/seu-usuario/.claude/voz/voz.sh permissao",
-            "async": true
-          }
-        ]
-      },
-      {
-        "matcher": "idle_prompt",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/Users/seu-usuario/.claude/voz/voz.sh espera",
-            "async": true
-          }
-        ]
-      }
-    ]
-  }
-}
+Se você é o dono do repositório, não precisa criar fork nem branch separada. Basta autenticar o GitHub CLI na máquina:
+
+```zsh
+gh auth login
 ```
 
-### Antigravity (`~/.gemini/config/hooks.json`)
+Ao rodar o `instalar.sh`, ele reconhece automaticamente que a conta logada no `gh` é a dona do repositório e já configura o `origin` para fazer os commits e pushes diários direto na sua `main`.
 
-```json
-{
-  "voz": {
-    "PreToolUse": [
-      {
-        "matcher": "ask_question",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/Users/seu-usuario/.claude/voz/voz.sh --agy permissao"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "type": "command",
-        "command": "/Users/seu-usuario/.claude/voz/voz.sh --agy terminei"
-      }
-    ]
-  }
-}
+### Caso 2: Outros usuários (Fork ou Branch própria)
+
+O repositório principal aceita `push` apenas do dono original, evitando mistura de vozes e perfis na `main`.
+
+Para que o seu ambiente faça o salvamento e `push` diário automático dos seus próprios áudios (`sons/`, `narracoes/`, `catalogo.json` e `estilo.json`), autentique o `gh` e crie seu fork:
+
+```zsh
+gh auth login
+```
+
+Em seguida, crie o fork na sua conta do GitHub apontando o `origin` local para ele:
+
+```zsh
+cd ~/.claude/voz && gh repo fork judhagsan/voz --remote=true --remote-name=origin
+```
+
+Se quiser zerar as narrações antigas para começar o seu acervo do zero no seu fork:
+
+```zsh
+rm -rf ~/.claude/voz/narracoes/* && : > ~/.claude/voz/narracoes.tsv && /usr/bin/python3 -I ~/.claude/voz/comum.py catalogo
+```
+
+Se preferir usar uma branch específica dentro do seu fork (em vez da `main`):
+
+```zsh
+cd ~/.claude/voz && git checkout -b meu-perfil && git push -u origin meu-perfil
+```
+
+O script detecta automaticamente a branch ativa (`HEAD`) e envia todas as atualizações automáticas do banco de vozes para `origin/<sua-branch>`.
+
+---
+
+## 4. Como usar no terminal
+
+Mostrar o painel com todos os repositórios (destacando os que estão em andamento no topo):
+
+```zsh
+voz
+```
+
+Mostrar **apenas** os repositórios que têm trabalho em andamento (branch ativa, arquivos modificados, commits sem push ou PR aberto):
+
+```zsh
+voz -a
+```
+
+Abrir o painel em **modo contínuo** (atualiza sozinho a cada 5 segundos e fala o resumo inicial em voz alta ao abrir):
+
+```zsh
+voz -w
+```
+
+Definir um intervalo personalizado em segundos no modo contínuo (exemplo: 10 segundos):
+
+```zsh
+voz -w 10
 ```
 
 ---
 
-## Comandos úteis
+## Estrutura de arquivos
 
-```bash
-# Testar os avisos manualmente
-~/.claude/voz/voz.sh terminei
-~/.claude/voz/voz.sh permissao
-~/.claude/voz/voz.sh espera
-
-# Simular novas frases a partir de um transcript sem gastar créditos da ElevenLabs
-python3 ~/.claude/voz/gerar.py simular /caminho/do/transcript.jsonl
-
-# Simular a narração do último turno de um transcript
-python3 ~/.claude/voz/narrar.py simular /caminho/do/transcript.jsonl
-```
+| Arquivo / Pasta | Função |
+| :--- | :--- |
+| `painel.py` | Painel visual de repositórios no terminal (executado pelo comando `voz`). |
+| `voz.sh` | Entrada dos hooks de eventos (`terminei`, `permissao`, `espera` e `pos-tool`). |
+| `comum.py` | Cliente ElevenLabs, ajuste de tom/velocidade via `ffmpeg`, trava `flock`, catálogo verificado (`catalogo.json`) e sincronização Git. |
+| `narrar.py` | Narração contextual com fila de múltiplos agentes e reaproveitamento de áudios existentes. |
+| `gerar.py` | Geração periódica de novas frases curtas e evolução do perfil em `estilo.json`. |
+| `instalar.sh` | Instalador automático para macOS via terminal. |
+| `config.json` | Configurações da voz (`Laura`, `tom_voz: 0.90`, `velocidade_voz: 0.91`), modelo (`eleven_v4`) e limites. |
+| `catalogo.json` | Relação verificada entre cada arquivo `.mp3` existente no disco, seu texto e suas palavras-chave. |
+| `sons/` | Áudios curtos divididos em `terminei/`, `permissao/` e `espera/`. |
+| `narracoes/` | Áudios de narração contextual organizados por repositório/projeto. |
