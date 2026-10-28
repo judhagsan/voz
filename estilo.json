@@ -1,17 +1,19 @@
 {
-  "tom": "Direto, prático e informal, com humor leve e gosto por comandos de programação. Pede ações objetivas e confirma com ok ou sim, às vezes com pressa e um pouco de sarcasmo.",
+  "tom": "Direto, prático e informal, com humor leve, focado em programação e em comandos objetivos.",
   "expressoes": [
     "prontinho",
     "feito",
     "missão cumprida",
-    "psiu",
     "tô te esperando",
     "bora lá",
     "deu ruim",
-    "sem cooautor",
     "tá funcionando",
-    "ó só",
-    "beleza"
+    "beleza",
+    "pode liberar",
+    "vai nessa",
+    "manda ver",
+    "tá conectado",
+    "sem coautor"
   ],
-  "atualizado_em": "2026-10-28 17:54:00"
+  "atualizado_em": "2026-10-28 17:57:12"
 }
