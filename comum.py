@@ -230,3 +230,58 @@ def sincronizar_git(cfg, forcar=False):
         return False
     log("git sync: alterações do banco enviadas para origin/main")
     return True
+
+
+def comando_autorizado_agy(cmd):
+    """Verifica se o CommandLine já consta na lista permissions.allow do Antigravity."""
+    cfg_agy = Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
+    if not cfg_agy.exists() or not cmd:
+        return False
+    try:
+        allow = set(json.loads(cfg_agy.read_text(encoding="utf-8")).get("permissions", {}).get("allow", []))
+    except ValueError:
+        return False
+    if f"command({cmd})" in allow:
+        return True
+    # Comandos simples sem encadeamento podem bater pelo binário ou prefixo (ex: "git status").
+    if not re.search(r"[;&|`$><\n]", cmd):
+        partes = cmd.split()
+        if partes and f"command({partes[0]})" in allow:
+            return True
+        if len(partes) >= 2 and f"command({partes[0]} {partes[1]})" in allow:
+            return True
+    return False
+
+
+def agy_precisa_permissao(token):
+    """Retorna True se a ferramenta no Antigravity parou aguardando aprovação do usuário."""
+    import sys
+
+    try:
+        entrada = json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        return False
+    tc = entrada.get("toolCall") or {}
+    nome = tc.get("name", "")
+    args = tc.get("args") or {}
+
+    if nome == "ask_question":
+        return True
+
+    cmd = str(args.get("CommandLine", "")).strip()
+    if nome == "run_command" and comando_autorizado_agy(cmd):
+        return False
+
+    pendente = ESTADO / "agy-pendente"
+    time.sleep(0.8)
+    # Se PostToolUse já limpou ou outro tool call entrou no lugar, já executou sem parar.
+    if not pendente.exists() or pendente.read_text(encoding="utf-8").strip() != token:
+        return False
+    return True
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 2 and sys.argv[1] == "agy-permissao":
+        sys.exit(0 if agy_precisa_permissao(sys.argv[2]) else 1)

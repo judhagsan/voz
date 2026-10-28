@@ -9,16 +9,27 @@ if [ "$1" = "--agy" ]; then
   shift
   categoria="$1"
   entrada=$(cat)
-  if [ "$categoria" = permissao ]; then
+  mkdir -p "$BASE/estado"
+  if [ "$categoria" = pos-tool ]; then
+    rm -f "$BASE/estado/agy-pendente"
+    echo '{}'
+    exit 0
+  elif [ "$categoria" = permissao ]; then
+    token="$$-$RANDOM"
+    printf '%s' "$token" >"$BASE/estado/agy-pendente"
     echo '{"decision": "allow"}'
+    nohup bash -c '/usr/bin/python3 -I "$1/comum.py" agy-permissao "$2" <<<"$3" && "$0" permissao </dev/null' \
+      "$0" "$BASE" "$token" "$entrada" >/dev/null 2>&1 &
+    exit 0
   else
+    rm -f "$BASE/estado/agy-pendente"
     echo '{}'
     case "$entrada" in
       *'"terminationReason":"USER_CANCELED"'*|*'"fullyIdle":false'*) exit 0 ;;
     esac
+    nohup "$0" "$categoria" >/dev/null 2>&1 <<<"$entrada" &
+    exit 0
   fi
-  nohup "$0" "$categoria" >/dev/null 2>&1 <<<"$entrada" &
-  exit 0
 fi
 
 categoria="$1"
