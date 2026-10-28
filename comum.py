@@ -179,3 +179,54 @@ def instante(registro):
 
 def agora():
     return datetime.now(timezone.utc).timestamp()
+
+
+CAMINHOS_BANCO = ["sons", "narracoes", "estilo.json", "historico.tsv", "narracoes.tsv"]
+
+
+def sincronizar_git(cfg, forcar=False):
+    """Faz commit e push diário da base de vozes e estilo se houver alterações."""
+    marca = ESTADO / "ultimo-sync"
+    intervalo = cfg.get("intervalo_horas", 24) * 3600
+    if not forcar and marca.exists() and time.time() - marca.stat().st_mtime < intervalo:
+        return False
+    marca.touch()
+
+    alvos = [c for c in CAMINHOS_BANCO if (BASE / c).exists()]
+    if not alvos:
+        return False
+    status = subprocess.run(
+        ["git", "-C", str(BASE), "status", "--porcelain", "--", *alvos],
+        capture_output=True,
+        text=True,
+    )
+    if status.returncode != 0 or not status.stdout.strip():
+        return False
+
+    subprocess.run(["git", "-C", str(BASE), "add", "--", *alvos], check=True)
+    msg = (
+        "chore(banco): sincroniza base diária de vozes e perfil de estilo\n\n"
+        "Registra no repositório os novos áudios sintetizados, narrações e a\n"
+        "evolução do vocabulário acumulado nas sessões do dia, preservando o\n"
+        "histórico completo sem sobrescrever alterações manuais de código."
+    )
+    r_commit = subprocess.run(
+        ["git", "-C", str(BASE), "commit", "-m", msg],
+        capture_output=True,
+        text=True,
+    )
+    if r_commit.returncode != 0:
+        log("git commit ignorado: " + (r_commit.stderr or r_commit.stdout).strip()[:200])
+        return False
+
+    r_push = subprocess.run(
+        ["git", "-C", str(BASE), "push", "origin", "main"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if r_push.returncode != 0:
+        log("git push falhou: " + (r_push.stderr or r_push.stdout).strip()[:200])
+        return False
+    log("git sync: alterações do banco enviadas para origin/main")
+    return True

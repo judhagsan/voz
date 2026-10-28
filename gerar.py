@@ -7,6 +7,7 @@ Uso:
   gerar.py automatico           chamado pelo voz.sh, com o JSON do hook na entrada
   gerar.py configurar           acha a voz, o modelo e o orçamento no ElevenLabs
   gerar.py simular <transcript> mostra as frases propostas, sem sintetizar
+  gerar.py sincronizar          faz commit e push imediato da base se houver mudanças
 """
 
 import json
@@ -21,7 +22,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from comum import (  # noqa: E402
     BLOQUEIO, ESTADO, LOG, SONS, TAGS, BASE, api_bloqueada, carregar_config, carregar_estilo, chamar_claude,
-    chave_api, log, mensagens_do_usuario, normalizar, requisicao, salvar_config, salvar_estilo, sem_tags, sintetizar,
+    chave_api, log, mensagens_do_usuario, normalizar, requisicao, salvar_config, salvar_estilo, sem_tags,
+    sincronizar_git, sintetizar,
 )
 
 HISTORICO = BASE / "historico.tsv"
@@ -151,16 +153,20 @@ def automatico():
     if not transcript or not os.path.exists(transcript) or not cfg.get("voice_id"):
         return
     if api_bloqueada():
+        sincronizar_git(cfg)
         return
 
     marca = ESTADO / "ultima-geracao"
     if marca.exists() and time.time() - marca.stat().st_mtime < cfg["intervalo_horas"] * 3600:
+        sincronizar_git(cfg)
         return
     categorias = categorias_abertas(cfg)
     if not categorias:
+        sincronizar_git(cfg)
         return
     mensagens = mensagens_do_usuario(transcript)
     if len(mensagens) < cfg["min_mensagens"]:
+        sincronizar_git(cfg)
         return
     chave = chave_api(cfg)
     if not chave:
@@ -179,6 +185,7 @@ def automatico():
         aprovadas = pedir_frases(cfg, mensagens, frases_existentes(), categorias)
         for categoria, frase in aprovadas.items():
             salvar_frase(cfg, chave, categoria, frase)
+        sincronizar_git(cfg, forcar=True)
     except Exception as erro:  # noqa: BLE001 - roda em segundo plano, só registra
         log("erro: %s" % erro)
     finally:
@@ -249,6 +256,8 @@ if __name__ == "__main__":
         automatico()
     elif comando == "configurar":
         configurar()
+    elif comando == "sincronizar":
+        sincronizar_git(carregar_config(), forcar=True)
     elif comando == "simular" and len(sys.argv) > 2:
         simular(sys.argv[2])
     else:
