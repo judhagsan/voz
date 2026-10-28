@@ -1,0 +1,16 @@
+{
+  "voice_id": "NS7yU4WmAouJsg84X3Mg",
+  "voice_name": "Mayla",
+  "model_id": "eleven_v4",
+  "keychain_service": "elevenlabs-api-key",
+  "modelo_claude": "haiku",
+  "intervalo_horas": 24,
+  "min_mensagens": 8,
+  "max_por_categoria": 0,
+  "narrar": {
+    "ativo": true,
+    "min_segundos": 45,
+    "max_caracteres_dia": 233,
+    "guardar_dias": 0
+  }
+}
