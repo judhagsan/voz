@@ -1,11 +1,14 @@
 {
-  "tom": "Direto, prático e informal em português brasileiro.",
+  "tom": "Direto, prático e informal, mistura comandos e termos de programação com bom humor leve. Costuma pedir ações objetivas e confirma com ok ou sim.",
   "expressoes": [
     "prontinho",
     "feito",
     "missão cumprida",
     "psiu",
-    "tô te esperando"
+    "tô te esperando",
+    "bora lá",
+    "deu ruim",
+    "sem cooautor"
   ],
-  "atualizado_em": "2026-10-28"
+  "atualizado_em": "2026-10-28 17:53:17"
 }
