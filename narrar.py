@@ -102,7 +102,7 @@ def montar_pedido(projeto, pedido, resposta, estilo, minutos):
     existentes = falas_do_catalogo(projeto)
     bloco_existentes = "\n".join("- " + f for f in existentes) if existentes else "(nenhum áudio gravado ainda para este projeto)"
     desc_projeto = (
-        "sessão na pasta pessoal (identifique o nome real do projeto pelo texto da resposta, ex: Aracuan, Pindorama, MenuSpoiler, tmux)"
+        "sessão na pasta pessoal (identifique o nome real do projeto pelo texto da resposta, ex: Voz, Pindorama, MenuSpoiler, tmux)"
         if projeto == "geral"
         else projeto
     )
@@ -129,7 +129,7 @@ Jeito de falar do usuário (mensagens recentes dele):
 Regras:
 - uma ou duas frases curtas e fluidas, no máximo {LIMITE_PALAVRAS} palavras no total;
 - REUTILIZAÇÃO INTELIGENTE (ECONOMIA DE CRÉDITOS): se algum dos "Áudios já gravados" acima servir bem e com precisão para avisar o resultado atual (ex: proposta pronta aguardando aprovação no mesmo projeto), devolva EXATAMENTE o texto dele para reaproveitarmos o arquivo sem gastar créditos. Se o resultado tiver detalhes novos importantes, escreva uma fala nova;
-- SEMPRE mencione de forma natural de qual projeto ou ferramenta está falando (ex: "Aqui no Aracuan...", "No Pindorama...", "No Menu Spoiler..."). Se o campo Projeto indicar a pasta pessoal, identifique o nome do projeto pelo assunto do pedido/resposta;
+- SEMPRE mencione de forma natural de qual projeto ou ferramenta está falando (ex: "Aqui no Voz...", "No Pindorama...", "No Menu Spoiler..."). Se o campo Projeto indicar a pasta pessoal, identifique o nome do projeto pelo assunto do pedido/resposta;
 - adapte ao contexto da resposta final:
   1. se executou código/mudanças: conte em poucas palavras o que ficou pronto (ou se algo falhou);
   2. se apresentou um plano ou proposta: resuma a ideia principal em uma frase e avise que aguarda aprovação;
