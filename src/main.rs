@@ -6,6 +6,7 @@ mod fonetica;
 mod gemini;
 mod narrar;
 mod painel;
+mod resumo;
 mod tela;
 mod transcript;
 
@@ -98,18 +99,18 @@ fn main() {
         let transcript = args.get(2).map(Path::new);
         let cwd = args.get(3).map(Path::new);
         if let Some(t) = transcript {
-            let (inicio, _pedido, resp) = transcript::ultimo_turno(t);
+            let (inicio, pedido, resp) = transcript::ultimo_turno(t);
             let resp_texto = resp.unwrap_or_else(|| "Nenhuma resposta encontrada.".to_string());
             let proj = narrar::nome_do_projeto(cwd);
-            let resumo = transcript::extrair_resumo_direto(&resp_texto, &proj);
-            let gemini =
-                fonetica::ajustar_fonetica(&resumo, &fonetica::carregar_regras(&base, false));
+            let fala = narrar::montar_fala(&base, &proj, &pedido, &resp_texto);
+            let para_voz =
+                fonetica::ajustar_fonetica(&fala, &fonetica::carregar_regras(&base, false));
 
             println!("--- Simulação de Narração ---");
             println!("Início: {:?}", inicio);
             println!("Projeto: {proj}");
-            println!("Original: {resumo}");
-            println!("Para o Gemini: {gemini}");
+            println!("Resumo: {fala}");
+            println!("Para a voz: {para_voz}");
         } else {
             eprintln!("Uso: voz simular <transcript.jsonl> [cwd]");
         }

@@ -43,6 +43,29 @@ pub fn nome_do_projeto(cwd: Option<&Path>) -> String {
         .to_string()
 }
 
+/// Tamanho máximo da fala da narração (`narrar.palavras`, padrão 40).
+fn palavras_da_fala(cfg: &serde_json::Value) -> usize {
+    cfg.pointer("/narrar/palavras")
+        .and_then(|m| m.as_u64())
+        .filter(|&n| n > 0)
+        .unwrap_or(40) as usize
+}
+
+/// Escreve a fala da narração: um resumo do Gemini; sem chave ou sem rede, o
+/// começo da resposta, cortado no mesmo tamanho.
+pub fn montar_fala(base: &Path, projeto: &str, pedido: &str, resposta: &str) -> String {
+    let cfg = crate::fala::ler_config(base);
+    let palavras = palavras_da_fala(&cfg);
+    let gemini = crate::gemini::Config::de_json(cfg.get("gemini"));
+    match crate::resumo::resumir(&gemini, palavras, projeto, pedido, resposta, 20) {
+        Ok(fala) => fala,
+        Err(e) => {
+            eprintln!("[voz] resumo indisponível ({e}); lendo o começo da resposta.");
+            extrair_resumo_direto(resposta, projeto, palavras)
+        }
+    }
+}
+
 pub fn tentar_narrar(
     base: &Path,
     entrada_json: &str,
@@ -104,7 +127,7 @@ pub fn tentar_narrar(
             })
     });
 
-    let (inicio, _pedido, final_resp) = ultimo_turno(&transcript_path);
+    let (inicio, pedido, final_resp) = ultimo_turno(&transcript_path);
 
     if min_segundos > 0.0 {
         if let Some(ini) = inicio {
@@ -130,11 +153,11 @@ pub fn tentar_narrar(
     };
 
     let projeto = nome_do_projeto(cwd_path.as_deref());
-    let resumo = extrair_resumo_direto(&resposta_texto, &projeto);
-    if resumo.trim().is_empty() {
+    let fala = montar_fala(base, &projeto, &pedido, &resposta_texto);
+    if fala.trim().is_empty() {
         return false;
     }
 
-    crate::fala::falar(base, &resumo, 40);
+    crate::fala::falar(base, &fala, 40);
     true
 }

@@ -23,16 +23,25 @@ pub fn limpar_linha(linha: &str) -> String {
     sem_bullet.trim().trim_end_matches(':').to_string()
 }
 
-pub fn extrair_resumo_direto(resposta: &str, projeto: &str) -> String {
+/// Fala de reserva da narração, para quando o resumo do Gemini não vem: usa o
+/// texto corrido da resposta final, pulando títulos, tabelas, citações, links
+/// soltos e tudo dentro de blocos de código. Com `max_palavras` > 0, fica nas
+/// frases inteiras que cabem no limite; com 0, lê tudo.
+pub fn extrair_resumo_direto(resposta: &str, projeto: &str, max_palavras: usize) -> String {
     let mut candidatos = Vec::new();
+    let mut em_bloco = false;
+    let mut palavras_lidas = 0;
 
     for linha in resposta.lines() {
         let l = linha.trim();
-        if l.is_empty() {
+        if l.starts_with("```") {
+            em_bloco = !em_bloco;
+            continue;
+        }
+        if em_bloco || l.is_empty() {
             continue;
         }
         if l.starts_with('#')
-            || l.starts_with("```")
             || l.starts_with('|')
             || l.starts_with('>')
             || l.starts_with("<!--")
@@ -41,11 +50,18 @@ pub fn extrair_resumo_direto(resposta: &str, projeto: &str) -> String {
             continue;
         }
 
-        let l_limpo = limpar_linha(l);
-        let palavras_count = l_limpo.split_whitespace().count();
-        if palavras_count >= 4 {
+        let mut l_limpo = limpar_linha(l);
+        let palavras = l_limpo.split_whitespace().count();
+        if palavras >= 4 {
+            // Item de lista sem ponto final colaria no próximo na fala.
+            let sem_separador = l_limpo.trim_end_matches([';', ',']).len();
+            l_limpo.truncate(sem_separador);
+            if !l_limpo.ends_with(['.', '!', '?', '…']) {
+                l_limpo.push('.');
+            }
             candidatos.push(l_limpo);
-            if candidatos.len() >= 2 {
+            palavras_lidas += palavras;
+            if max_palavras > 0 && palavras_lidas >= max_palavras {
                 break;
             }
         }
@@ -59,48 +75,14 @@ pub fn extrair_resumo_direto(resposta: &str, projeto: &str) -> String {
         };
     }
 
-    let frase_completa = candidatos.join(" ");
-    let re_sentencas = Regex::new(r"(?:\.|\!|\?)+").unwrap();
+    let texto = candidatos.join(" ");
+    let mut escolhida = if max_palavras == 0 {
+        texto
+    } else {
+        limitar_frases(&texto, max_palavras)
+    };
 
-    let mut sentencas: Vec<&str> = Vec::new();
-    let mut inicio = 0;
-    for mat in re_sentencas.find_iter(&frase_completa) {
-        let s = frase_completa[inicio..mat.end()].trim();
-        if !s.is_empty() {
-            sentencas.push(s);
-        }
-        inicio = mat.end();
-    }
-    if inicio < frase_completa.len() {
-        let s = frase_completa[inicio..].trim();
-        if !s.is_empty() {
-            sentencas.push(s);
-        }
-    }
-
-    let primeira = sentencas.first().copied().unwrap_or(candidatos[0].as_str());
-    let mut escolhida = primeira.to_string();
-
-    if sentencas.len() > 1 {
-        let segunda = sentencas[1];
-        let total_palavras =
-            primeira.split_whitespace().count() + segunda.split_whitespace().count();
-        if total_palavras <= 22 {
-            escolhida = format!("{primeira} {segunda}");
-        }
-    }
-
-    let palavras: Vec<&str> = escolhida.split_whitespace().collect();
-    if palavras.len() > 25 {
-        escolhida = format!("{}...", palavras[..25].join(" "));
-    }
-
-    if !escolhida.ends_with('.')
-        && !escolhida.ends_with('!')
-        && !escolhida.ends_with('?')
-        && !escolhida.ends_with('…')
-        && !escolhida.ends_with("...")
-    {
+    if !escolhida.ends_with(['.', '!', '?', '…']) {
         escolhida.push('.');
     }
 
@@ -122,6 +104,41 @@ pub fn extrair_resumo_direto(resposta: &str, projeto: &str) -> String {
         }
     }
 
+    escolhida
+}
+
+/// Junta frases inteiras até `max_palavras`. Se a primeira sozinha passa do
+/// limite, corta nela com reticências.
+fn limitar_frases(texto: &str, max_palavras: usize) -> String {
+    // Pontuação seguida de espaço ou fim: "README.md" e "v0.2.0" não quebram.
+    let re_fim = Regex::new(r"[.!?…]+(?:\s+|$)").unwrap();
+    let mut frases = Vec::new();
+    let mut inicio = 0;
+    for m in re_fim.find_iter(texto) {
+        frases.push(texto[inicio..m.end()].trim());
+        inicio = m.end();
+    }
+    if inicio < texto.len() {
+        frases.push(texto[inicio..].trim());
+    }
+
+    let mut escolhida = String::new();
+    let mut total = 0;
+    for frase in frases.into_iter().filter(|f| !f.is_empty()) {
+        let palavras = frase.split_whitespace().count();
+        if total == 0 && palavras > max_palavras {
+            let corte: Vec<&str> = frase.split_whitespace().take(max_palavras).collect();
+            return format!("{}...", corte.join(" "));
+        }
+        if total + palavras > max_palavras {
+            break;
+        }
+        if !escolhida.is_empty() {
+            escolhida.push(' ');
+        }
+        escolhida.push_str(frase);
+        total += palavras;
+    }
     escolhida
 }
 
@@ -281,10 +298,37 @@ mod tests {
     fn test_extrair_resumo_direto() {
         let resposta =
             "Identifiquei a causa raiz dos erros.\n\n1. O comando ps falhava no sandbox.";
-        let resumo = extrair_resumo_direto(resposta, "voz");
+        let resumo = extrair_resumo_direto(resposta, "voz", 0);
         assert_eq!(
             resumo,
             "No voz, identifiquei a causa raiz dos erros. O comando ps falhava no sandbox."
+        );
+    }
+
+    #[test]
+    fn test_sem_limite_le_tudo_menos_codigo_tabela_e_titulo() {
+        let resposta = "## Resumo\n\nCorrigi o painel de cotas hoje.\n\n```rust\nlet x = 1; // isto não deve ser lido\n```\n\n| a | b |\n\n- Ajustei o arquivo README.md da versão v0.2.0;\n- Rodei todos os testes do projeto.";
+        assert_eq!(
+            extrair_resumo_direto(resposta, "", 0),
+            "Corrigi o painel de cotas hoje. Ajustei o arquivo README.md da versão v0.2.0. Rodei todos os testes do projeto."
+        );
+    }
+
+    #[test]
+    fn test_limite_fica_em_frases_inteiras() {
+        let resposta = "Primeira frase com cinco palavras. Segunda frase também tem cinco. Terceira frase passaria do limite.";
+        assert_eq!(
+            extrair_resumo_direto(resposta, "", 11),
+            "Primeira frase com cinco palavras. Segunda frase também tem cinco."
+        );
+    }
+
+    #[test]
+    fn test_limite_corta_primeira_frase_longa() {
+        let resposta = "Uma frase comprida demais para caber no limite pedido.";
+        assert_eq!(
+            extrair_resumo_direto(resposta, "", 4),
+            "Uma frase comprida demais..."
         );
     }
 }

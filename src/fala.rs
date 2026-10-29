@@ -18,7 +18,7 @@ const FRASES_PADRAO: &[(&str, &str)] = &[
     ("espera", "Tô te esperando."),
 ];
 
-fn ler_config(base: &Path) -> serde_json::Value {
+pub(crate) fn ler_config(base: &Path) -> serde_json::Value {
     fs::read_to_string(base.join("config.json"))
         .ok()
         .and_then(|c| serde_json::from_str(&c).ok())

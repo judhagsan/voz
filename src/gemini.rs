@@ -20,6 +20,8 @@ pub struct Config {
     pub modelo: String,
     pub voz: String,
     pub estilo: String,
+    /// Modelo de texto que escreve o resumo da narração.
+    pub modelo_resumo: String,
 }
 
 impl Config {
@@ -41,11 +43,12 @@ impl Config {
                 "Português do Brasil, sotaque brasileiro. Voz calma e natural, um pouco grave, \
                  com entonação viva mas contida, como uma colega contando o que terminou.",
             ),
+            modelo_resumo: campo("modelo_resumo", "gemini-3.5-flash-lite"),
         }
     }
 }
 
-fn chave() -> Result<String, String> {
+pub(crate) fn chave() -> Result<String, String> {
     let saida = Command::new("security")
         .args(["find-generic-password", "-s", SERVICO_CHAVE, "-w"])
         .output()
@@ -154,6 +157,7 @@ mod tests {
         let cfg = Config::de_json(Some(&bloco));
         assert_eq!(cfg.voz, "Kore");
         assert_eq!(cfg.modelo, "gemini-3.8-flash-lite-tts");
+        assert_eq!(cfg.modelo_resumo, "gemini-3.5-flash-lite");
         assert!(cfg.estilo.contains("Português do Brasil"));
         assert_eq!(Config::de_json(None).voz, "Vindemiatrix");
     }
