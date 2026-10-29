@@ -2,9 +2,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::audio::tocar_enfileirado;
-use crate::fonetica::{ajustar_fonetica, carregar_regras};
-use crate::ipc::sintetizar_uds;
 use crate::transcript::{extrair_resumo_direto, ultimo_turno};
 
 pub fn nome_do_projeto(cwd: Option<&Path>) -> String {
@@ -44,6 +41,29 @@ pub fn nome_do_projeto(cwd: Option<&Path>) -> String {
         .and_then(|f| f.to_str())
         .unwrap_or("geral")
         .to_string()
+}
+
+/// Tamanho máximo da fala da narração (`narrar.palavras`, padrão 40).
+fn palavras_da_fala(cfg: &serde_json::Value) -> usize {
+    cfg.pointer("/narrar/palavras")
+        .and_then(|m| m.as_u64())
+        .filter(|&n| n > 0)
+        .unwrap_or(40) as usize
+}
+
+/// Escreve a fala da narração: um resumo do Gemini; sem chave ou sem rede, o
+/// começo da resposta, cortado no mesmo tamanho.
+pub fn montar_fala(base: &Path, projeto: &str, pedido: &str, resposta: &str) -> String {
+    let cfg = crate::fala::ler_config(base);
+    let palavras = palavras_da_fala(&cfg);
+    let gemini = crate::gemini::Config::de_json(cfg.get("gemini"));
+    match crate::resumo::resumir(&gemini, palavras, projeto, pedido, resposta, 20) {
+        Ok(fala) => fala,
+        Err(e) => {
+            eprintln!("[voz] resumo indisponível ({e}); lendo o começo da resposta.");
+            extrair_resumo_direto(resposta, projeto, palavras)
+        }
+    }
 }
 
 pub fn tentar_narrar(
@@ -107,7 +127,7 @@ pub fn tentar_narrar(
             })
     });
 
-    let (inicio, _pedido, final_resp) = ultimo_turno(&transcript_path);
+    let (inicio, pedido, final_resp) = ultimo_turno(&transcript_path);
 
     if min_segundos > 0.0 {
         if let Some(ini) = inicio {
@@ -133,30 +153,11 @@ pub fn tentar_narrar(
     };
 
     let projeto = nome_do_projeto(cwd_path.as_deref());
-    let resumo = extrair_resumo_direto(&resposta_texto, &projeto);
-    if resumo.trim().is_empty() {
+    let fala = montar_fala(base, &projeto, &pedido, &resposta_texto);
+    if fala.trim().is_empty() {
         return false;
     }
 
-    let regras = carregar_regras(base);
-    let fala_fonetica = ajustar_fonetica(&resumo, &regras);
-
-    let socket_path = base.join("estado").join("motor.sock");
-    let wav_bytes = match sintetizar_uds(&socket_path, &fala_fonetica, 40) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("[voz] Erro na síntese via socket: {e}");
-            return false;
-        }
-    };
-
-    let estado_dir = base.join("estado");
-    fs::create_dir_all(&estado_dir).ok();
-    let temp_wav = estado_dir.join("narracao_temp.wav");
-    if fs::write(&temp_wav, wav_bytes).is_err() {
-        return false;
-    }
-
-    tocar_enfileirado(base, &temp_wav, "Terminei");
+    crate::fala::falar(base, &fala, 40);
     true
 }

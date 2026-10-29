@@ -7,13 +7,14 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-const RESET: &str = "\x1b[0m";
-const NEGRITO: &str = "\x1b[1m";
-const FRACO: &str = "\x1b[2m";
-const VERDE: &str = "\x1b[32m";
-const AMARELO: &str = "\x1b[33m";
-const AZUL: &str = "\x1b[36m";
-const MAGENTA: &str = "\x1b[35m";
+pub(crate) const RESET: &str = "\x1b[0m";
+pub(crate) const NEGRITO: &str = "\x1b[1m";
+pub(crate) const FRACO: &str = "\x1b[2m";
+pub(crate) const VERDE: &str = "\x1b[32m";
+pub(crate) const AMARELO: &str = "\x1b[33m";
+pub(crate) const AZUL: &str = "\x1b[36m";
+pub(crate) const MAGENTA: &str = "\x1b[35m";
+pub(crate) const VERMELHO: &str = "\x1b[31m";
 
 const PASTAS_IGNORADAS: &[&str] = &[
     "Library",
@@ -52,13 +53,13 @@ pub struct RepoStatus {
     pub em_andamento: bool,
 }
 
-fn largura_visivel(texto: &str) -> usize {
+pub(crate) fn largura_visivel(texto: &str) -> usize {
     let re = Regex::new(r"\x1b\[[0-9;]*m").unwrap();
     let limpo = re.replace_all(texto, "");
     limpo.chars().count()
 }
 
-fn alinhar(texto: &str, largura: usize) -> String {
+pub(crate) fn alinhar(texto: &str, largura: usize) -> String {
     let vis = largura_visivel(texto);
     let falta = largura.saturating_sub(vis);
     format!("{}{}", texto, " ".repeat(falta))
@@ -413,7 +414,7 @@ fn formatar_pr(d: &RepoStatus) -> String {
     format!("{AZUL}{}{RESET}", partes.join(", "))
 }
 
-pub fn renderizar_quadro(dados: &[RepoStatus], apenas_ativos: bool) -> String {
+pub fn renderizar_quadro_repos(dados: &[RepoStatus], apenas_ativos: bool) -> Vec<String> {
     let exibidos: Vec<&RepoStatus> = if apenas_ativos {
         dados.iter().filter(|d| d.em_andamento).collect()
     } else {
@@ -509,7 +510,7 @@ pub fn renderizar_quadro(dados: &[RepoStatus], apenas_ativos: bool) -> String {
         );
         saida.push(format!("│ {vazio} │"));
         saida.push(format!("╰─{}─╯", "─".repeat(largura_interna)));
-        return saida.join("\n");
+        return saida;
     }
 
     for (c0, c1, c2, c3) in linhas_formatadas {
@@ -523,7 +524,18 @@ pub fn renderizar_quadro(dados: &[RepoStatus], apenas_ativos: bool) -> String {
     }
     saida.push(base_caixa);
 
-    saida.join("\n")
+    saida
+}
+
+pub fn renderizar_quadro(
+    dados: &[RepoStatus],
+    apenas_ativos: bool,
+    cotas: Option<&crate::cotas::Cotas>,
+    largura_tela: Option<usize>,
+) -> String {
+    let linhas_esq = renderizar_quadro_repos(dados, apenas_ativos);
+    let linhas_dir = crate::cotas::renderizar_card(cotas, chrono::Local::now());
+    crate::tela::juntar_colunas(&linhas_esq, &linhas_dir, largura_tela)
 }
 
 pub fn montar_trechos_resumo(dados: &[RepoStatus]) -> Vec<String> {
@@ -598,37 +610,57 @@ pub fn rodar_painel(base: &Path, apenas_ativos: bool, watch: Option<f64>) {
             thread::sleep(Duration::from_secs(15));
         });
 
+        // As CLIs levam até alguns segundos para responder; a consulta fica fora
+        // do laço de desenho para o quadro não travar enquanto elas respondem.
+        let cotas_mutex = Arc::new(Mutex::new(crate::cotas::ler_cache(base)));
+        let base_cotas = base.to_path_buf();
+        let cotas_clone = Arc::clone(&cotas_mutex);
+        thread::spawn(move || loop {
+            // Outro painel aberto pode ter atualizado o cache em disco.
+            let leitura = match crate::cotas::ler_cache(&base_cotas) {
+                Some(c) if crate::cotas::fresca(&c) => c,
+                _ => crate::cotas::atualizar(&base_cotas),
+            };
+            *cotas_clone.lock().unwrap() = Some(leitura);
+            thread::sleep(Duration::from_secs(30));
+        });
+
         let dados_iniciais = coletar_status(base, &repos, &cache_mutex.lock().unwrap());
         let trechos_iniciais = montar_trechos_resumo(&dados_iniciais);
         let base_audio = base.to_path_buf();
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(500));
-            let regras = crate::fonetica::carregar_regras(&base_audio);
-            let sock = base_audio.join("estado").join("motor.sock");
             for trecho in trechos_iniciais {
-                let fala = crate::fonetica::ajustar_fonetica(&trecho, &regras);
-                if let Ok(wav) = crate::ipc::sintetizar_uds(&sock, &fala, 30) {
-                    let out = base_audio.join("estado").join("painel_temp.wav");
-                    if fs::write(&out, wav).is_ok() {
-                        crate::audio::tocar_enfileirado(&base_audio, &out, &fala);
-                    }
-                }
+                crate::fala::falar(&base_audio, &trecho, 30);
             }
         });
 
-        print!("\x1b[2J\x1b[H\x1b[?25l");
+        crate::tela::esconder_cursor_ate_sair();
+        print!("\x1b[2J\x1b[H");
         let mut ultimo_quadro = String::new();
+        let mut ultimo_tamanho = None;
 
         loop {
             let cache_snapshot = cache_mutex.lock().unwrap().clone();
             let dados = coletar_status(base, &repos, &cache_snapshot);
-            let quadro = renderizar_quadro(&dados, apenas_ativos);
+            let cotas = cotas_mutex.lock().unwrap().clone();
+            let tamanho = crate::tela::tamanho();
+            let quadro =
+                renderizar_quadro(&dados, apenas_ativos, cotas.as_ref(), tamanho.map(|t| t.0));
+            let tela = crate::tela::ajustar(&quadro, tamanho);
 
-            if quadro != ultimo_quadro {
-                print!("\x1b[H{}\x1b[J", quadro);
+            // Redimensionar reorganiza o que já estava na tela; só redesenhar
+            // por cima deixaria pedaços do quadro antigo, então limpa tudo.
+            if tamanho != ultimo_tamanho {
+                print!("\x1b[2J");
+                ultimo_tamanho = tamanho;
+                ultimo_quadro.clear();
+            }
+            if tela != ultimo_quadro {
+                print!("\x1b[H{}\x1b[J", tela);
                 use std::io::Write;
                 std::io::stdout().flush().ok();
-                ultimo_quadro = quadro;
+                ultimo_quadro = tela;
             }
 
             thread::sleep(intervalo);
@@ -668,8 +700,13 @@ pub fn rodar_painel(base: &Path, apenas_ativos: bool, watch: Option<f64>) {
         let cache_snapshot = cache_mutex.lock().unwrap().clone();
         let t0 = Instant::now();
         let dados = coletar_status(base, &repos, &cache_snapshot);
+        let cotas = crate::cotas::obter(base);
         let dur = t0.elapsed();
-        println!("{}", renderizar_quadro(&dados, apenas_ativos));
+        let largura_tela = crate::tela::tamanho().map(|t| t.0);
+        println!(
+            "{}",
+            renderizar_quadro(&dados, apenas_ativos, Some(&cotas), largura_tela)
+        );
         eprintln!("{FRACO}Varredura concluída em {dur:?}{RESET}");
     }
 }

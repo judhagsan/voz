@@ -1,14 +1,24 @@
 {
-  "motor": "local",
-  "voz": "Laura",
-  "tom_voz": 1.0,
-  "velocidade_voz": 1.0,
-  "modelo_claude": "haiku",
-  "intervalo_horas": 24,
-  "min_mensagens": 8,
-  "max_por_categoria": 0,
+  "gemini": {
+    "modelos": [
+      "gemini-3.8-flash-tts",
+      "gemini-3.8-flash-lite-tts"
+    ],
+    "voz": "Vindemiatrix",
+    "estilo": "Português do Brasil, sotaque brasileiro. Voz feminina calma, natural e profissional.",
+    "modelo_resumo": "gemini-3.5-flash-lite"
+  },
+  "reserva": {
+    "voz": "Luciana"
+  },
+  "frases": {
+    "terminei": ["Pronto por aqui, já pode conferir!"],
+    "permissao": ["Preciso que você aprove aqui pra seguir."],
+    "espera": ["Parada aqui esperando você me dizer."]
+  },
   "narrar": {
     "ativo": true,
-    "min_segundos": 0
+    "min_segundos": 0,
+    "palavras": 40
   }
 }

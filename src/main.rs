@@ -1,9 +1,13 @@
 mod agy;
 mod audio;
+mod cotas;
+mod fala;
 mod fonetica;
-mod ipc;
+mod gemini;
 mod narrar;
 mod painel;
+mod resumo;
+mod tela;
 mod transcript;
 
 use std::fs;
@@ -23,6 +27,25 @@ fn ler_stdin() -> String {
     let mut buffer = String::new();
     let _ = io::stdin().read_to_string(&mut buffer);
     buffer
+}
+
+/// Repete o hook num processo separado, para quem chamou não esperar a fala.
+fn disparar_desacoplado(categoria: &str, entrada: &str) {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let filho = Command::new(exe)
+        .arg(categoria)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    if let Ok(mut f) = filho {
+        if let Some(mut entrada_filho) = f.stdin.take() {
+            use std::io::Write;
+            entrada_filho.write_all(entrada.as_bytes()).ok();
+        }
+    }
 }
 
 fn main() {
@@ -48,13 +71,14 @@ fn main() {
                     .unwrap_or(0);
                 let token = format!("{}-{}", std::process::id(), nanos);
                 fs::write(&pendente_file, &token).ok();
-                println!("{{\"decision\": \"allow\"}}");
 
-                // Avalia se o comando requer permissão real
+                // Só avisa quando o comando espera aprovação de verdade; a fala
+                // sai num processo à parte para não segurar o agente.
                 if agy::agy_precisa_permissao(&entrada) {
-                    if let Some(arq) = audio::sortear_audio(&base, "permissao") {
-                        audio::tocar_enfileirado(&base, &arq, "Preciso da sua permissão");
-                    }
+                    println!("{{\"decision\": \"ask\"}}");
+                    disparar_desacoplado("permissao", "");
+                } else {
+                    println!("{{\"decision\": \"allow\"}}");
                 }
             }
             _ => {
@@ -67,22 +91,7 @@ fn main() {
                     return;
                 }
 
-                // Dispara processo desacoplado para a categoria
-                if let Ok(exe) = std::env::current_exe() {
-                    let mut child = Command::new(exe)
-                        .arg(categoria)
-                        .stdin(std::process::Stdio::piped())
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .spawn();
-
-                    if let Ok(ref mut c) = child {
-                        if let Some(ref mut sin) = c.stdin {
-                            use std::io::Write;
-                            sin.write_all(entrada.as_bytes()).ok();
-                        }
-                    }
-                }
+                disparar_desacoplado(categoria, &entrada);
             }
         }
         return;
@@ -92,18 +101,18 @@ fn main() {
         let transcript = args.get(2).map(Path::new);
         let cwd = args.get(3).map(Path::new);
         if let Some(t) = transcript {
-            let (inicio, _pedido, resp) = transcript::ultimo_turno(t);
+            let (inicio, pedido, resp) = transcript::ultimo_turno(t);
             let resp_texto = resp.unwrap_or_else(|| "Nenhuma resposta encontrada.".to_string());
             let proj = narrar::nome_do_projeto(cwd);
-            let resumo = transcript::extrair_resumo_direto(&resp_texto, &proj);
-            let regras = fonetica::carregar_regras(&base);
-            let fonetico = fonetica::ajustar_fonetica(&resumo, &regras);
+            let fala = narrar::montar_fala(&base, &proj, &pedido, &resp_texto);
+            let para_voz =
+                fonetica::ajustar_fonetica(&fala, &fonetica::carregar_regras(&base, false));
 
             println!("--- Simulação de Narração ---");
             println!("Início: {:?}", inicio);
             println!("Projeto: {proj}");
-            println!("Original: {resumo}");
-            println!("Fonético: {fonetico}");
+            println!("Resumo: {fala}");
+            println!("Para a voz: {para_voz}");
         } else {
             eprintln!("Uso: voz simular <transcript.jsonl> [cwd]");
         }
@@ -112,33 +121,21 @@ fn main() {
 
     if args.len() > 1 && args[1] == "fonetica" {
         let texto = args[2..].join(" ");
-        let regras = fonetica::carregar_regras(&base);
-        println!("{}", fonetica::ajustar_fonetica(&texto, &regras));
-        return;
-    }
-
-    if args.len() > 1 && args[1] == "sintetizar" {
-        let texto = args[2..].join(" ");
-        let regras = fonetica::carregar_regras(&base);
-        let texto_fonetico = fonetica::ajustar_fonetica(&texto, &regras);
-        let sock = base.join("estado").join("motor.sock");
-        match ipc::sintetizar_uds(&sock, &texto_fonetico, 40) {
-            Ok(bytes) => {
-                let out = base.join("estado").join("teste_rust.wav");
-                fs::write(&out, bytes).ok();
-                println!("Sintetizado com sucesso! Tocando...");
-                audio::tocar_enfileirado(&base, &out, &texto);
-            }
-            Err(e) => eprintln!("Erro: {e}"),
+        for (voz, reserva) in [("gemini", false), ("reserva", true)] {
+            let regras = fonetica::carregar_regras(&base, reserva);
+            println!("{voz}: {}", fonetica::ajustar_fonetica(&texto, &regras));
         }
         return;
     }
 
+    if args.len() > 1 && args[1] == "sintetizar" {
+        fala::falar(&base, &args[2..].join(" "), 40);
+        return;
+    }
+
     if args.len() > 1 && args[1] == "tocar" {
-        let arq = args.get(2).map(Path::new);
-        let res = args.get(3).map(|s| s.as_str()).unwrap_or("");
-        if let Some(a) = arq {
-            audio::tocar_enfileirado(&base, a, res);
+        if let Some(arquivo) = args.get(2) {
+            audio::tocar(&base, Path::new(arquivo));
         }
         return;
     }
@@ -177,16 +174,7 @@ fn main() {
         return;
     }
 
-    let reserva = match categoria {
-        "terminei" => "Terminei",
-        "permissao" => "Preciso da sua permissão",
-        "espera" => "Tô te esperando",
-        _ => return,
-    };
-
-    if let Some(arq) = audio::sortear_audio(&base, categoria) {
-        audio::tocar_enfileirado(&base, &arq, reserva);
-    } else {
-        let _ = Command::new("say").arg(reserva).status();
+    if let Some(frase) = fala::sortear_frase(&base, categoria) {
+        fala::falar(&base, &frase, 30);
     }
 }
