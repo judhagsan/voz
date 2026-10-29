@@ -1,9 +1,12 @@
 #!/bin/bash
-# Toca uma frase sorteada da categoria pedida (terminei, permissao, espera).
-# Uso nos hooks do Claude Code: voz.sh <categoria>. O JSON do hook chega pela
-# entrada padrão e, em "terminei", segue para o gerador de frases novas.
+# Despachante de avisos de voz. Prioriza o binário nativo em Rust para latência < 2ms.
 
 BASE="$HOME/.claude/voz"
+BIN="$BASE/target/release/voz"
+
+if [ -x "$BIN" ]; then
+  exec "$BIN" "$@"
+fi
 
 if [ "$1" = "--agy" ]; then
   shift

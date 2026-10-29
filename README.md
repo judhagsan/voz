@@ -15,10 +15,11 @@ Sistema de avisos falados, narração contextual por projeto, painel visual de r
      - **PR aberto:** número dos Pull Requests abertos no repositório (`PR #N`).
    - No modo contínuo (`voz -w`), atualiza a tabela automaticamente na tela e fala um resumo inicial das pendências uma única vez ao abrir.
 
-2. **Narração contextual efêmera e fila sem sobreposição (`narrar.py` + `comum.py`):**
-   - Ao concluir uma tarefa, identifica o repositório/projeto e resume em voz alta o que foi feito, proposto ou explicado.
+2. **Narração contextual efêmera e despachante nativo em Rust:**
+   - Despachante nativo de altíssima velocidade em Rust (< 2ms de tempo de resposta nos hooks) com comunicação em memória via Unix Domain Socket (`estado/motor.sock`).
+   - Ao concluir uma tarefa, identifica o repositório/projeto e resume em voz alta o que foi feito com pronúncia técnica refinada (`fonetica.json`).
    - Gera áudio WAV nativo sob demanda na pasta temporária `estado/` e reproduz via `afplay`, sem poluir o repositório Git com gravações passadas.
-   - Possui **fila global com trava (`flock`)**: quando vários agentes rodam em paralelo em projetos diferentes, as vozes nunca se atropelam — ou tocam em fila ordenada, ou juntam os resultados em uma única fala identificando cada repositório.
+   - Possui **fila global com trava**: quando vários agentes rodam em paralelo em projetos diferentes, as vozes nunca se atropelam — ou tocam em fila ordenada, ou juntam os resultados em uma única fala identificando cada repositório.
 
 3. **Catálogo verificado e síntese local rápida (`catalogo.json` + `motor_local.py`):**
    - Mantém um pequeno acervo de áudios curtos em `sons/` para avisos instantâneos (latência 0,01s).

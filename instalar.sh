@@ -64,6 +64,11 @@ fi
 echo "==> Verificando dependências do motor de voz local (chatterbox-tts, soundfile)..."
 "$DESTINO/.venv/bin/pip" install --quiet --upgrade chatterbox-tts soundfile torch
 
+if command -v cargo >/dev/null 2>&1; then
+  echo "==> Compilando despachante de alta performance em Rust..."
+  (cd "$DESTINO" && cargo build --release --quiet)
+fi
+
 if [ -f "$DESTINO/tmux.conf" ]; then
   ln -sf "$DESTINO/tmux.conf" "$HOME/.tmux.conf"
   echo "==> Configuração do tmux vinculada em ~/.tmux.conf."

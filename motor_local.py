@@ -12,7 +12,9 @@ import fcntl
 import io
 import json
 import os
+import select
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -21,6 +23,7 @@ from pathlib import Path
 BASE = Path.home() / ".claude" / "voz"
 ESTADO = BASE / "estado"
 FILA_DIR = ESTADO / "fila-motor"
+SOCKET_FILE = ESTADO / "motor.sock"
 PID_FILE = ESTADO / "motor.pid"
 LOCK_FILE = ESTADO / "motor.lock"
 HEARTBEAT_FILE = ESTADO / "motor.heartbeat"
@@ -93,10 +96,21 @@ def rodar_daemon():
     _garantir_condicionais(model)
     model.conds = Conditionals.load(str(CONDS_FILE), map_location="cpu").to("cpu")
     HEARTBEAT_FILE.write_text(str(time.time()), encoding="utf-8")
-    print(f"[motor_local] Pronto! Aguardando pedidos em {FILA_DIR}...", flush=True)
+
+    SOCKET_FILE.unlink(missing_ok=True)
+    server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server_sock.bind(str(SOCKET_FILE))
+    server_sock.listen(5)
+    server_sock.setblocking(False)
+    print(f"[motor_local] Pronto! Escutando em UDS ({SOCKET_FILE}) e fila ({FILA_DIR})...", flush=True)
 
     def _encerrar(signum=None, frame=None):
         print("[motor_local] Encerrando daemon...", flush=True)
+        SOCKET_FILE.unlink(missing_ok=True)
+        try:
+            server_sock.close()
+        except Exception:
+            pass
         PID_FILE.unlink(missing_ok=True)
         HEARTBEAT_FILE.unlink(missing_ok=True)
         try:
@@ -121,9 +135,50 @@ def rodar_daemon():
                 HEARTBEAT_FILE.write_text(str(agora), encoding="utf-8")
                 ultimo_pulso = agora
 
+            # 1. Atende conexões via Unix Domain Socket em memória
+            r_socks, _, _ = select.select([server_sock], [], [], 0.15)
+            if r_socks:
+                conn, _ = server_sock.accept()
+                conn.settimeout(60.0)
+                try:
+                    dados_bytes = b""
+                    while b"\n" not in dados_bytes:
+                        chunk = conn.recv(4096)
+                        if not chunk:
+                            break
+                        dados_bytes += chunk
+                    req = json.loads(dados_bytes.decode("utf-8"))
+                    texto = req.get("texto", "").strip()
+                    exag = float(req.get("exaggeration", 0.35))
+                    cfg_w = float(req.get("cfg_weight", 0.5))
+
+                    t1 = time.time()
+                    wav = model.generate(
+                        text=texto,
+                        language_id="pt",
+                        audio_prompt_path=None,
+                        exaggeration=exag,
+                        cfg_weight=cfg_w,
+                    )
+                    dur = time.time() - t1
+                    buf = io.BytesIO()
+                    sf.write(buf, wav.squeeze().cpu().numpy(), model.sr, format="WAV")
+                    wav_bytes = buf.getvalue()
+
+                    conn.sendall(len(wav_bytes).to_bytes(4, "big") + wav_bytes)
+                    print(f"[motor_local] [UDS] Sintetizado em {dur:.2f}s ({len(wav_bytes)} bytes WAV): {texto[:40]}...", flush=True)
+                except Exception as e:
+                    try:
+                        conn.sendall((0).to_bytes(4, "big"))
+                    except Exception:
+                        pass
+                    print(f"[motor_local] [UDS] Erro na síntese: {e}", flush=True)
+                finally:
+                    conn.close()
+                continue
+
             pedidos = sorted(FILA_DIR.glob("req_*.json"))
             if not pedidos:
-                time.sleep(0.15)
                 continue
 
             for p_req in pedidos:
@@ -200,8 +255,7 @@ def garantir_daemon_iniciado():
 
 
 def sintetizar(texto, tom_voz=1.0, velocidade_voz=1.0, timeout=40):
-    """Envia pedido para o serviço de voz em background via fila de arquivos."""
-    FILA_DIR.mkdir(parents=True, exist_ok=True)
+    """Envia pedido para o serviço de voz em background via socket UDS ou fila de arquivos."""
     garantir_daemon_iniciado()
 
     try:
@@ -210,6 +264,37 @@ def sintetizar(texto, tom_voz=1.0, velocidade_voz=1.0, timeout=40):
     except Exception:
         pass
 
+    # 1. Envio ultrarrápido em RAM via Unix Domain Socket
+    if SOCKET_FILE.exists():
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            sock.connect(str(SOCKET_FILE))
+            payload = json.dumps({"texto": texto}, ensure_ascii=False) + "\n"
+            sock.sendall(payload.encode("utf-8"))
+
+            tam_bytes = sock.recv(4)
+            if len(tam_bytes) == 4:
+                tam = int.from_bytes(tam_bytes, "big")
+                if tam > 0:
+                    recebido = bytearray()
+                    while len(recebido) < tam:
+                        chunk = sock.recv(min(65536, tam - len(recebido)))
+                        if not chunk:
+                            break
+                        recebido.extend(chunk)
+                    if len(recebido) == tam:
+                        return bytes(recebido)
+        except Exception:
+            pass
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    # 2. Fallback via fila de arquivos em disco
+    FILA_DIR.mkdir(parents=True, exist_ok=True)
     req_id = f"{time.time():.6f}_{os.getpid()}"
     p_req = FILA_DIR / f"req_{req_id}.json"
     p_resp_wav = FILA_DIR / f"resp_{req_id}.wav"
