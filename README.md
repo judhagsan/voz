@@ -8,7 +8,7 @@ Sistema de avisos falados, narração contextual por projeto, painel visual de r
 
 ## O que o projeto faz
 
-1. **Painel visual de repositórios no terminal (`voz` / `painel.py`):**
+1. **Painel visual de repositórios no terminal (`voz`):**
    - Mostra em uma tabela rápida todos os repositórios locais e o estado remoto no GitHub:
      - **Andamento local:** branch ativa e quantidade de arquivos modificados;
      - **Sem push:** quantos commits locais ainda não foram enviados ao remoto (`↑`) ou faltam puxar (`↓`);
@@ -125,7 +125,8 @@ voz -w 10
 | Arquivo / Pasta | Função |
 | :--- | :--- |
 | `motor_local.py` | Motor de síntese neural local Chatterbox com timbre da Laura, saída WAV direta, fila assíncrona IPC e trava `flock`. |
-| `painel.py` | Painel visual de repositórios no terminal (executado pelo comando `voz`). |
+| `src/` | Código-fonte em Rust do binário nativo `voz` (painel visual de repositórios, despachante de hooks e IPC). |
+| `painel.py` | Implementação original em Python mantida como referência/fallback. |
 | `voz.sh` | Entrada dos hooks de eventos (`terminei`, `permissao`, `espera` e `pos-tool`). |
 | `comum.py` | Utilitários de áudio, fila `flock`, catálogo verificado (`catalogo.json`) e sincronização Git. |
 | `narrar.py` | Narração contextual efêmera com fila de múltiplos agentes sob demanda. |

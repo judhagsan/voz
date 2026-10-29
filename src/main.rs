@@ -3,6 +3,7 @@ mod audio;
 mod fonetica;
 mod ipc;
 mod narrar;
+mod painel;
 mod transcript;
 
 use std::fs;
@@ -139,6 +140,28 @@ fn main() {
         if let Some(a) = arq {
             audio::tocar_enfileirado(&base, a, res);
         }
+        return;
+    }
+
+    // Modo Painel: se chamado sem argumentos ou com flags do painel (-a, -w, --ativos, --watch)
+    if args.len() == 1
+        || args
+            .iter()
+            .any(|a| a == "-a" || a == "--ativos" || a == "-w" || a == "--watch")
+    {
+        let apenas_ativos = args.iter().any(|a| a == "-a" || a == "--ativos");
+        let mut watch = None;
+        for (i, a) in args.iter().enumerate() {
+            if a == "-w" || a == "--watch" {
+                let seg = args
+                    .get(i + 1)
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(1.0);
+                watch = Some(seg);
+                break;
+            }
+        }
+        painel::rodar_painel(&base, apenas_ativos, watch);
         return;
     }
 

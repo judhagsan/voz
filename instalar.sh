@@ -65,8 +65,12 @@ echo "==> Verificando dependências do motor de voz local (chatterbox-tts, sound
 "$DESTINO/.venv/bin/pip" install --quiet --upgrade chatterbox-tts soundfile torch
 
 if command -v cargo >/dev/null 2>&1; then
-  echo "==> Compilando despachante de alta performance em Rust..."
+  echo "==> Compilando despachante de alta performance e painel em Rust..."
   (cd "$DESTINO" && cargo build --release --quiet)
+  if [ -x "$DESTINO/target/release/voz" ]; then
+    ln -sf "$DESTINO/target/release/voz" "$BIN_DIR/voz"
+    echo "==> Binário nativo em Rust vinculado em ~/.local/bin/voz."
+  fi
 fi
 
 if [ -f "$DESTINO/tmux.conf" ]; then
