@@ -630,16 +630,8 @@ pub fn rodar_painel(base: &Path, apenas_ativos: bool, watch: Option<f64>) {
         let base_audio = base.to_path_buf();
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(500));
-            let regras = crate::fonetica::carregar_regras(&base_audio);
-            let sock = base_audio.join("estado").join("motor.sock");
             for trecho in trechos_iniciais {
-                let fala = crate::fonetica::ajustar_fonetica(&trecho, &regras);
-                if let Ok(wav) = crate::ipc::sintetizar_uds(&sock, &fala, 30) {
-                    let out = base_audio.join("estado").join("painel_temp.wav");
-                    if fs::write(&out, wav).is_ok() {
-                        crate::audio::tocar_enfileirado(&base_audio, &out, &fala);
-                    }
-                }
+                crate::fala::falar(&base_audio, &trecho, 30);
             }
         });
 

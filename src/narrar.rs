@@ -2,9 +2,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::audio::tocar_enfileirado;
-use crate::fonetica::{ajustar_fonetica, carregar_regras};
-use crate::ipc::sintetizar_uds;
 use crate::transcript::{extrair_resumo_direto, ultimo_turno};
 
 pub fn nome_do_projeto(cwd: Option<&Path>) -> String {
@@ -138,25 +135,6 @@ pub fn tentar_narrar(
         return false;
     }
 
-    let regras = carregar_regras(base);
-    let fala_fonetica = ajustar_fonetica(&resumo, &regras);
-
-    let socket_path = base.join("estado").join("motor.sock");
-    let wav_bytes = match sintetizar_uds(&socket_path, &fala_fonetica, 40) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("[voz] Erro na síntese via socket: {e}");
-            return false;
-        }
-    };
-
-    let estado_dir = base.join("estado");
-    fs::create_dir_all(&estado_dir).ok();
-    let temp_wav = estado_dir.join("narracao_temp.wav");
-    if fs::write(&temp_wav, wav_bytes).is_err() {
-        return false;
-    }
-
-    tocar_enfileirado(base, &temp_wav, "Terminei");
+    crate::fala::falar(base, &resumo, 40);
     true
 }

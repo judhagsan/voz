@@ -1,7 +1,9 @@
 {
-  "descricao": "Dicionário de pronúncia fonética para termos técnicos no sintetizador pt-BR.",
+  "descricao": "Pronúncia de termos na voz. 'termos' vale para toda voz (nomes que nenhuma acerta sozinha); 'termos_reserva' só para o say do macOS, que lê termos em inglês com fonética portuguesa.",
   "termos": {
-    "\\bjudhagsan\\b": "Judá-gê-sâm",
+    "\\bjudhagsan\\b": "Judá-gê-sâm"
+  },
+  "termos_reserva": {
     "\\bgithub\\b": "Guít-râb",
     "\\bgitlab\\b": "Guít-lébi",
     "\\bgit\\b": "Guite",

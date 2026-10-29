@@ -17,10 +17,10 @@ if ! command -v brew >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "==> Verificando e atualizando dependências para as versões mais recentes (tmux, gh, uv, espeak-ng)..."
+echo "==> Verificando e atualizando dependências para as versões mais recentes (tmux, gh)..."
 brew update --quiet || true
 
-for pacote in tmux gh uv espeak-ng; do
+for pacote in tmux gh; do
   if ! brew list --formula "$pacote" >/dev/null 2>&1; then
     echo "==> Instalando $pacote (versão mais recente)..."
     brew install "$pacote"
@@ -31,6 +31,19 @@ for pacote in tmux gh uv espeak-ng; do
     echo "==> $pacote já está na versão mais recente."
   fi
 done
+
+# O cargo precisa do linker das Command Line Tools da Apple.
+if ! xcode-select -p >/dev/null 2>&1; then
+  echo "ERRO: faltam as Command Line Tools da Apple."
+  echo "Rode 'xcode-select --install' e depois o instalador de novo."
+  exit 1
+fi
+
+# O binário é compilado com o cargo; sem Rust instalado, vem pelo Homebrew.
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "==> Instalando Rust (cargo)..."
+  brew install rust
+fi
 
 mkdir -p "$HOME/.claude" "$BIN_DIR"
 
@@ -53,25 +66,12 @@ if command -v gh >/dev/null 2>&1; then
   fi
 fi
 
-chmod +x "$DESTINO/voz.sh" "$DESTINO/painel.py" "$DESTINO/motor_local.py" "$DESTINO/instalar.sh"
-ln -sf "$DESTINO/painel.py" "$BIN_DIR/voz"
+chmod +x "$DESTINO/voz.sh" "$DESTINO/instalar.sh"
 
-if [ ! -d "$DESTINO/.venv" ]; then
-  echo "==> Criando ambiente virtual Python 3.11 para o motor de voz local..."
-  uv venv "$DESTINO/.venv" --python 3.11
-fi
-
-echo "==> Verificando dependências do motor de voz local (chatterbox-tts, soundfile)..."
-"$DESTINO/.venv/bin/pip" install --quiet --upgrade chatterbox-tts soundfile torch
-
-if command -v cargo >/dev/null 2>&1; then
-  echo "==> Compilando despachante de alta performance e painel em Rust..."
-  (cd "$DESTINO" && cargo build --release --quiet)
-  if [ -x "$DESTINO/target/release/voz" ]; then
-    ln -sf "$DESTINO/target/release/voz" "$BIN_DIR/voz"
-    echo "==> Binário nativo em Rust vinculado em ~/.local/bin/voz."
-  fi
-fi
+echo "==> Compilando o binário voz (painel, hooks e voz)..."
+(cd "$DESTINO" && cargo build --release --quiet)
+ln -sf "$DESTINO/target/release/voz" "$BIN_DIR/voz"
+echo "==> Binário vinculado em ~/.local/bin/voz."
 
 if [ -f "$DESTINO/tmux.conf" ]; then
   ln -sf "$DESTINO/tmux.conf" "$HOME/.tmux.conf"
@@ -163,18 +163,14 @@ for k, v in dados2.items():
 cfg2.write_text(json.dumps(novo_dados2, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
 
-/usr/bin/python3 -I "$DESTINO/comum.py" catalogo
-
-mkdir -p "$DESTINO/.git/hooks"
-cat > "$DESTINO/.git/hooks/pre-commit" <<'HOOK'
-#!/usr/bin/env bash
-set -euo pipefail
-REPO_DIR="$(git rev-parse --show-toplevel)"
-/usr/bin/python3 -I "$REPO_DIR/comum.py" catalogo >/dev/null
-git -C "$REPO_DIR" add -- sons estilo.json catalogo.json historico.tsv 2>/dev/null || true
-HOOK
-chmod +x "$DESTINO/.git/hooks/pre-commit"
+if ! security find-generic-password -s gemini-api-key >/dev/null 2>&1; then
+  echo ""
+  echo "==> Falta a chave da voz (Gemini). Crie em https://aistudio.google.com/apikey e salve:"
+  echo "    security add-generic-password -a \"\$USER\" -s gemini-api-key -w"
+  echo "    Sem a chave, os avisos saem pela voz do sistema (say)."
+fi
 
 echo ""
-echo "==> Instalação concluída! Abra um novo terminal (ou rode 'source ~/.zshrc') e digite:"
-echo "    voz"
+echo "==> Instalação concluída! Abra um novo terminal (ou rode 'source ~/.zshrc') e teste:"
+echo "    voz                                  # painel de repositórios e cotas"
+echo "    voz sintetizar \"Olá, tudo certo.\"     # voz"

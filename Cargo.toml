@@ -6,8 +6,11 @@ authors = ["Judhá Santos <judhagsan@gmail.com>"]
 description = "Orquestrador de voz e despachante nativo para terminal e hooks de IA"
 
 [dependencies]
+base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+cpal = "0.15"
 serde_json = "1.0"
+ureq = "3"
 libc = "0.2"
 regex = "1.10"
 
