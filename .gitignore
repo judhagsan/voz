@@ -1,5 +1,7 @@
 estado/
 .venv/
 gerar.log
+narracoes/
+narracoes.tsv
 __pycache__/
 .DS_Store

@@ -1,10 +1,10 @@
-"""Narra em voz alta o resultado de uma tarefa longa do Claude Code.
+"""Narra em voz alta o resultado de uma tarefa longa.
 
 Chamado pelo voz.sh no hook Stop, com o JSON do hook na entrada. Quando o
-turno passou do tempo mínimo, pede ao Claude uma fala curta sobre o que foi
-feito, sintetiza com o motor local (timbre da Laura), toca e guarda o áudio em
-narracoes/. Sai com 0 só quando narrou; em qualquer outro caso o voz.sh toca
-uma frase do sorteio.
+turno passou do tempo mínimo, extrai um resumo direto da resposta final,
+sintetiza com o motor local Chatterbox (timbre da Laura) e toca via fila.
+Sai com 0 só quando narrou; em qualquer outro caso o voz.sh toca uma frase
+do sorteio.
 
 Uso:
   narrar.py                              modo hook
@@ -22,16 +22,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from comum import (  # noqa: E402
-    BASE, ESTADO, NARRACOES, TAGS, agora, buscar_audio_existente, carregar_config,
-    carregar_estilo, chamar_claude, classificar_intencao, contem_termo_sensivel,
-    id_hash_texto, instante, log, mensagens_do_usuario, registros, sem_tags, sincronizar_catalogo,
-    sintetizar, texto_digitado, tocar_enfileirado,
+    BASE, ESTADO, agora, carregar_config,
+    classificar_intencao, instante, log,
+    registros, sem_tags, sintetizar, texto_digitado, tocar_enfileirado,
 )
 
-INDICE = BASE / "narracoes.tsv"
 FILA_DIR = ESTADO / "fila-narracao"
-# O modelo respeita melhor limite de palavras que de caracteres; o teto em
-# caracteres protege o tempo de síntese e concisão da narração.
 LIMITE_PALAVRAS = 25
 LIMITE_FALA = 220
 LIMITE_PALAVRAS_MULTI = 45
@@ -80,107 +76,66 @@ def nome_do_projeto(cwd):
     return raiz.name
 
 
-def falas_inteiras_do_catalogo(intencao=None, limite=15):
-    """Lista apenas falas completas (nunca cortadas) já gravadas no catálogo."""
-    itens = sincronizar_catalogo()
-    narracoes = [i for i in itens if i.get("tipo") == "narracao"]
-    if not intencao:
-        return [i["texto"] for i in narracoes[-limite:]]
-    da_intencao = [i["texto"] for i in narracoes if i.get("intencao") == intencao]
-    outras = [i["texto"] for i in narracoes if i.get("intencao") != intencao]
-    return (da_intencao[-limite:] + outras[-5:])[:limite]
+def limpar_linha(l):
+    """Remove marcações de markdown e pontuação que atrapalham a fala."""
+    l = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", l)
+    l = re.sub(r"[*_`#~]", "", l)
+    l = re.sub(r"^[0-9]+[.)]\s*", "", l)
+    l = re.sub(r"^[-*•]\s*", "", l)
+    return l.strip().rstrip(":")
 
 
-def montar_pedido(projeto, pedido, resposta, estilo, minutos):
-    conversa = "\n".join("> " + m.replace("\n", " ") for m in estilo)
-    perfil_salvo = carregar_estilo()
-    expressoes_str = ", ".join(perfil_salvo.get("expressoes", [])) or "(nenhuma)"
-    tom_str = perfil_salvo.get("tom") or "(em formação)"
-    resumo_estilo = f"Tom: {tom_str} | Expressões: {expressoes_str}"
-    intencao_previa = classificar_intencao(f"{pedido} {resposta}")
-    existentes = falas_inteiras_do_catalogo(intencao_previa)
-    bloco_existentes = "\n".join("- " + f for f in existentes) if existentes else "(nenhuma narração gravada ainda)"
-    return f"""Você é a voz de uma assistente de programação. Escreva uma fala curta, fluida e completa ao terminar uma tarefa, formando um banco de vozes reutilizável em qualquer projeto.
-
-A tarefa levou cerca de {minutos} minuto(s).
-
-O que o usuário pediu:
-{pedido[:1200]}
-
-Mensagem final da assistente (o que foi feito):
-{resposta[:2500]}
-
-Falas completas já gravadas no catálogo:
-{bloco_existentes}
-
-Perfil de estilo acumulado do usuário:
-{resumo_estilo}
-
-Jeito de falar do usuário (mensagens recentes dele):
-{conversa}
-
-Regras obrigatórias:
-- uma ou duas frases curtas e completas, no máximo {LIMITE_PALAVRAS} palavras no total;
-- REUTILIZAÇÃO DE ÁUDIOS INTEIROS: se alguma das "Falas completas já gravadas no catálogo" acima descrever exatamente o resultado atual, devolva o texto exato dela para reutilizarmos o áudio inteiro; caso contrário, escreva uma frase nova e completa para ser gravada inteira no banco;
-- DESIDENTIFICAÇÃO (BANCO UNIVERSAL): NUNCA mencione nomes de repositórios, projetos, branches, números de PR, nomes de arquivos ou caminhos. A frase deve soar natural e servir em qualquer projeto;
-- adapte à intenção da resposta final:
-  1. se aplicou mudanças ou validou código: avise de forma natural que os ajustes foram feitos e validados;
-  2. se apresentou um diagnóstico ou proposta: avise que a análise e a proposta estão prontas e aguarda confirmação;
-  3. se houve erro ou bloqueio: avise o motivo e peça uma decisão;
-- tom conversado, calmo, expressivo e próximo (com boa dicção e cadência natural, usando vírgulas e pontuação para guiar a entonação), sem soar robótico nem burocrático;
-- PROIBIDO usar tags entre colchetes (nada de [laughs], [chuckles], [sighs], etc.), risadinhas soltas, suspiros ou onomatopeias ("psiu", "shh", "hm", "haha", "rs", "kk", "ok");
-- português do Brasil natural, sem abreviações ("vc", "n", "pq", "tb", "blz") e com ortografia e acentuação 100% revisadas.
-
-Responda só com um JSON neste formato, sem mais nada: {{"fala": "..."}}"""
+def extrair_resumo_direto(resposta, projeto="geral"):
+    """Extrai a primeira frase conclusiva e objetiva da resposta final da assistente."""
+    linhas = [l.strip() for l in (resposta or "").splitlines() if l.strip()]
+    candidatos = []
+    for l in linhas:
+        if l.startswith(("#", "```", "|", ">", "<!--", "http")):
+            continue
+        l_limpo = limpar_linha(l)
+        if len(l_limpo.split()) >= 4:
+            candidatos.append(l_limpo)
+            if len(candidatos) >= 2:
+                break
+    if not candidatos:
+        return f"Tudo pronto por aqui no {projeto}." if projeto and projeto != "geral" else "Tudo pronto por aqui."
+    frase = " ".join(candidatos)
+    sentencas = [s.strip() for s in re.split(r"(?<=[.!?])\s+", frase) if s.strip()]
+    escolhida = sentencas[0] if sentencas else candidatos[0]
+    if len(sentencas) > 1 and len((escolhida + " " + sentencas[1]).split()) <= 22:
+        escolhida += " " + sentencas[1]
+    palavras = escolhida.split()
+    if len(palavras) > 25:
+        escolhida = " ".join(palavras[:25]) + "..."
+    if not escolhida.endswith((".", "!", "?", "…")):
+        escolhida += "."
+    if projeto and projeto != "geral" and not any(escolhida.lower().startswith(p) for p in ("no ", "na ", "em ", "aqui no ")):
+        escolhida = f"No {projeto}, {escolhida[:1].lower() + escolhida[1:]}"
+    return escolhida
 
 
-def montar_pedido_multiplo(itens, estilo):
-    """Monta um pedido unificado e desidentificado quando 2 ou mais agentes terminam quase juntos."""
-    conversa = "\n".join("> " + m.replace("\n", " ") for m in estilo)
-    perfil_salvo = carregar_estilo()
-    expressoes_str = ", ".join(perfil_salvo.get("expressoes", [])) or "(nenhuma)"
-    tom_str = perfil_salvo.get("tom") or "(em formação)"
-    resumo_estilo = f"Tom: {tom_str} | Expressões: {expressoes_str}"
-    blocos = []
-    for idx, it in enumerate(itens, 1):
-        ped = str(it.get("pedido", ""))[:400]
-        resp = str(it.get("resposta", ""))[:800]
-        blocos.append(f"Tarefa {idx}:\nPedido: {ped}\nResultado: {resp}")
-    relatorio = "\n\n".join(blocos)
-    return f"""Você é a voz de uma assistente de programação. Várias tarefas paralelas acabaram de terminar ao mesmo tempo. Escreva uma única fala curta, fluida e completa resumindo que as frentes paralelas concluíram (sem citar nomes de repositórios, projetos, branches ou arquivos).
-
-Tarefas concluídas:
-{relatorio}
-
-Perfil de estilo acumulado do usuário:
-{resumo_estilo}
-
-Jeito de falar do usuário:
-{conversa}
-
-Regras:
-- uma ou duas frases fluidas, com no máximo {LIMITE_PALAVRAS_MULTI} palavras no total;
-- NUNCA mencione nomes de repositórios, projetos, branches ou arquivos;
-- tom conversado, calmo, expressivo e com boa dicção, sem tags entre colchetes, sem risadinhas e sem "psiu" ou "ok";
-- português do Brasil falado com ortografia e acentuação 100% revisadas.
-
-Responda só com um JSON neste formato, sem mais nada: {{"fala": "..."}}"""
+def extrair_resumo_multiplo(itens):
+    """Gera resumo combinado quando 2 ou mais frentes paralelas terminam juntas."""
+    total = len(itens)
+    projetos = [it.get("projeto", "geral") for it in itens]
+    if total == 2:
+        return f"Concluí duas frentes em paralelo: no {projetos[0]} e no {projetos[1]}."
+    projs_str = ", ".join(p for p in projetos[:-1] if p != "geral") + " e " + (projetos[-1] if projetos[-1] != "geral" else "outras")
+    return f"Concluí {total} frentes de trabalho em paralelo: {projs_str}."
 
 
 def pedir_fala(cfg, transcript, cwd, resposta=None):
     inicio, pedido, final = ultimo_turno(transcript)
     resposta = resposta or final
-    if not inicio or not pedido or not resposta:
+    if not inicio or not resposta:
         return None, 0
     segundos = agora() - inicio
-    minutos = max(1, round(segundos / 60))
-    pedido_claude = montar_pedido(nome_do_projeto(cwd), pedido, resposta, mensagens_do_usuario(transcript, 10), minutos)
-    proposta = sem_tags(str(chamar_claude(cfg, pedido_claude, timeout=45).get("fala", ""))).strip()
+    projeto = nome_do_projeto(cwd)
+    proposta = extrair_resumo_direto(resposta, projeto)
     fala = encurtar(proposta, LIMITE_FALA)
     if not fala:
-        log("narração descartada: %s" % proposta)
-    elif fala != proposta:
-        log("narração encurtada: %s" % proposta)
+        log("narração descartada (vazia): %s" % proposta)
+        return None, segundos
     return fala, segundos
 
 
@@ -196,74 +151,32 @@ def encurtar(fala, limite=LIMITE_FALA):
     return curta or None
 
 
-def orcamento():
-    """Devolve o arquivo do gasto de hoje e quantos caracteres já foram usados."""
-    hoje = ESTADO / ("narracao-" + time.strftime("%Y-%m-%d"))
-    for antigo in ESTADO.glob("narracao-*"):
-        if antigo != hoje:
-            antigo.unlink()
-    return hoje, int(hoje.read_text()) if hoje.exists() else 0
-
-
-def guardar(projeto, fala, audio, dias):
-    NARRACOES.mkdir(parents=True, exist_ok=True)
-    intencao = classificar_intencao(fala)
-    arquivo = NARRACOES / (id_hash_texto(fala) + ".mp3")
+def guardar_efemero(fala, audio):
+    """Guarda a narração apenas em arquivo efêmero em estado/ para reprodução imediata."""
+    arquivo = ESTADO / "narracao_temp.wav"
     arquivo.write_bytes(audio)
-    with INDICE.open("a", encoding="utf-8") as h:
-        h.write("%s\t%s\t%s\n" % (arquivo.name, intencao, fala))
-    if dias > 0:
-        limite = time.time() - dias * 86400
-        for velho in NARRACOES.glob("*.mp3"):
-            if velho.stat().st_mtime < limite:
-                velho.unlink()
-    sincronizar_catalogo()
     return arquivo
 
 
 def processar_lote(cfg, itens, chave=None):
-    """Reutiliza um áudio inteiro equivalente do catálogo ou grava um novo áudio inteiro universal."""
-    narrar = cfg["narrar"]
-    arquivo_gasto, gasto = orcamento()
-
-    ultimo = itens[-1]
-    transcript = ultimo["transcript"]
-    msgs = mensagens_do_usuario(transcript, 10) if transcript and os.path.exists(transcript) else []
-
+    """Gera áudio contextual sob demanda e reproduz via fila sem gravar no Git."""
     try:
         if len(itens) == 1:
             it = itens[0]
-            minutos = max(1, round(it.get("segundos", 10) / 60))
-            pedido_claude = montar_pedido(it["projeto"], it["pedido"], it["resposta"], msgs, minutos)
-            proposta = sem_tags(str(chamar_claude(cfg, pedido_claude, timeout=45).get("fala", ""))).strip()
-            fala = encurtar(proposta, LIMITE_FALA)
+            fala = extrair_resumo_direto(it["resposta"], it["projeto"])
+            fala = encurtar(fala, LIMITE_FALA)
         else:
-            pedido_claude = montar_pedido_multiplo(itens, msgs)
-            proposta = sem_tags(str(chamar_claude(cfg, pedido_claude, timeout=45).get("fala", ""))).strip()
-            fala = encurtar(proposta, LIMITE_FALA_MULTI)
+            fala = extrair_resumo_multiplo(itens)
+            fala = encurtar(fala, LIMITE_FALA_MULTI)
 
-        if not fala or contem_termo_sensivel(fala):
-            log("narração descartada (vazia ou com termo sensível): %s" % proposta)
+        if not fala:
+            log("narração descartada (vazia)")
             return False
 
         intencao = classificar_intencao(fala)
-
-        # Só reutiliza se existir um áudio INTEIRO no catálogo com equivalência alta (>= 0.80).
-        arq_existente, texto_existente, nota = buscar_audio_existente(
-            fala,
-            escopo=intencao,
-            tipo="narracao",
-            limiar=0.80,
-        )
-        if arq_existente:
-            log("narração inteira reutilizada do catálogo (nota %.2f, local): %s" % (nota, texto_existente))
-            tocar_enfileirado(arq_existente)
-            return True
-
         audio = sintetizar(cfg, fala)
-        arquivo_gasto.write_text(str(gasto + len(fala)))
-        arquivo = guardar(intencao, fala, audio, narrar.get("guardar_dias", 0))
-        log("nova narração gravada no banco local (%s): %s" % (intencao, fala))
+        arquivo = guardar_efemero(fala, audio)
+        log("narração sintetizada no motor local (%s): %s" % (intencao, fala))
         tocar_enfileirado(arquivo)
         return True
     except Exception as erro:  # noqa: BLE001 - falha cai para o aviso curto inteiro em voz.sh

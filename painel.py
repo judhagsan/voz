@@ -376,7 +376,7 @@ def obter_ou_gerar_trecho(cfg, escopo, texto):
     """Usa cache local (estado/cache-painel) para trechos com nomes de repositórios locais."""
     pasta_cache = ESTADO / "cache-painel"
     pasta_cache.mkdir(parents=True, exist_ok=True)
-    arq = pasta_cache / (id_hash_texto(texto) + ".mp3")
+    arq = pasta_cache / (id_hash_texto(texto) + ".wav")
     if arq.is_file() and arq.stat().st_size > 0:
         return arq
     try:

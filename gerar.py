@@ -7,7 +7,6 @@ Uso:
   gerar.py automatico           chamado pelo voz.sh, com o JSON do hook na entrada
   gerar.py configurar           mostra o status do motor de voz local e condicionais
   gerar.py simular <transcript> mostra as frases propostas, sem sintetizar
-  gerar.py sincronizar          faz commit e push imediato da base se houver mudanças
 """
 
 import json
@@ -24,7 +23,7 @@ from comum import (  # noqa: E402
     ESTADO, LOG, SONS, TAGS, BASE, buscar_audio_existente, carregar_config,
     carregar_estilo, chamar_claude, contem_termo_sensivel, log, mensagens_do_usuario,
     normalizar, salvar_config, salvar_estilo, sem_tags, sincronizar_catalogo,
-    sincronizar_git, sintetizar,
+    sintetizar,
 )
 
 HISTORICO = BASE / "historico.tsv"
@@ -145,12 +144,12 @@ def salvar_frase(cfg, chave, categoria, frase):
     if arq_existente:
         log("frase já coberta pelo catálogo (%s, nota %.2f): %s -> %s" % (categoria, nota, frase, txt_existente))
         return
-    audio = sintetizar(cfg, chave, frase)
+    audio = sintetizar(cfg, frase)
     nome = re.sub(r'[/:\\"]', "-", frase)
-    destino = SONS / categoria / (nome + ".mp3")
+    destino = SONS / categoria / (nome + ".wav")
     n = 2
     while destino.exists():
-        destino = SONS / categoria / ("%s%02d.mp3" % (nome, n))
+        destino = SONS / categoria / ("%s%02d.wav" % (nome, n))
         n += 1
     destino.write_bytes(audio)
     with HISTORICO.open("a", encoding="utf-8") as h:
@@ -180,15 +179,12 @@ def automatico():
 
     marca = ESTADO / "ultima-geracao"
     if marca.exists() and time.time() - marca.stat().st_mtime < cfg["intervalo_horas"] * 3600:
-        sincronizar_git(cfg)
         return
     categorias = categorias_abertas(cfg)
     if not categorias:
-        sincronizar_git(cfg)
         return
     mensagens = mensagens_do_usuario(transcript)
     if len(mensagens) < cfg["min_mensagens"]:
-        sincronizar_git(cfg)
         return
 
     trava = ESTADO / "gerando.lock"
@@ -204,7 +200,6 @@ def automatico():
         aprovadas = pedir_frases(cfg, mensagens, frases_existentes(), categorias)
         for categoria, frase in aprovadas.items():
             salvar_frase(cfg, None, categoria, frase)
-        sincronizar_git(cfg, forcar=True)
     except Exception as erro:  # noqa: BLE001 - roda em segundo plano, só registra
         log("erro: %s" % erro)
     finally:
@@ -239,8 +234,6 @@ if __name__ == "__main__":
         automatico()
     elif comando == "configurar":
         configurar()
-    elif comando == "sincronizar":
-        sincronizar_git(carregar_config(), forcar=True)
     elif comando == "simular" and len(sys.argv) > 2:
         simular(sys.argv[2])
     else:

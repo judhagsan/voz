@@ -1,8 +1,8 @@
 # Voz
 
-Sistema de avisos falados, narração contextual por projeto, painel visual de repositórios no terminal e aprendizado contínuo de vocabulário no macOS, usando o motor de voz neural local **Chatterbox** com clonagem do timbre da **Laura** e ajuste de tom/cadência via **ffmpeg**.
+Sistema de avisos falados, narração contextual por projeto, painel visual de repositórios no terminal e aprendizado contínuo de vocabulário no macOS, usando o motor de voz neural local **Chatterbox** com clonagem direta do timbre da **Laura**.
 
-100% local, offline, sem envio de dados para serviços externos e sem custos de API ou limites de créditos.
+100% local, offline, sem custos de API, sem ffmpeg, sem envio de dados para serviços externos e sem acúmulo de áudios no Git.
 
 ---
 
@@ -15,27 +15,26 @@ Sistema de avisos falados, narração contextual por projeto, painel visual de r
      - **PR aberto:** número dos Pull Requests abertos no repositório (`PR #N`).
    - No modo contínuo (`voz -w`), atualiza a tabela automaticamente na tela e fala um resumo inicial das pendências uma única vez ao abrir.
 
-2. **Narração contextual e fila sem sobreposição (`narrar.py` + `comum.py`):**
+2. **Narração contextual efêmera e fila sem sobreposição (`narrar.py` + `comum.py`):**
    - Ao concluir uma tarefa, identifica o repositório/projeto e resume em voz alta o que foi feito, proposto ou explicado.
+   - Gera áudio WAV nativo sob demanda na pasta temporária `estado/` e reproduz via `afplay`, sem poluir o repositório Git com gravações passadas.
    - Possui **fila global com trava (`flock`)**: quando vários agentes rodam em paralelo em projetos diferentes, as vozes nunca se atropelam — ou tocam em fila ordenada, ou juntam os resultados em uma única fala identificando cada repositório.
 
 3. **Catálogo verificado e síntese local rápida (`catalogo.json` + `motor_local.py`):**
-   - Cruza todos os arquivos `.mp3` existentes em `sons/` e `narracoes/` com seus textos e palavras-chave.
-   - Antes de sintetizar qualquer áudio novo, verifica se já existe uma gravação compatível no catálogo para reutilizá-la de imediato.
-   - Quando precisa sintetizar, o motor residente local (`motor_local.py`) mantém os pesos e as condicionais pré-calculadas da Laura em memória, gerando o áudio em poucos segundos via CPU multicore.
+   - Mantém um pequeno acervo de áudios curtos em `sons/` para avisos instantâneos (latência 0,01s).
+   - Quando precisa sintetizar sob demanda, o serviço local residente (`motor_local.py`) mantém os pesos e as condicionais pré-calculadas da Laura em memória, gerando áudio em poucos segundos na CPU multicore.
 
 4. **Avisos rápidos e aprendizado de estilo (`voz.sh` + `gerar.py` + `estilo.json`):**
-   - Avisos para `terminei`, `permissao` (apenas quando um comando realmente aguarda aprovação manual) e `espera`.
-   - Aprende expressões e estilo de comunicação ao longo do uso e sincroniza automaticamente o banco de áudios com o repositório.
+   - Avisos imediatos para `terminei`, `permissao` (apenas quando um comando realmente aguarda aprovação manual) e `espera`.
+   - Aprende expressões e estilo de comunicação ao longo do uso e sincroniza automaticamente o repositório.
 
 ---
 
 ## Pré-requisitos
 
-O instalador verifica e atualiza automaticamente para as versões mais recentes via Homebrew:
+O instalador verifica e instala automaticamente para as versões mais recentes via Homebrew:
 
-- **macOS** (usa `afplay` nativo do sistema)
-- **ffmpeg** (ajuste de tom `0.90` e cadência `0.91` da voz)
+- **macOS** (usa `afplay` nativo do sistema para reproduzir WAV e MP3)
 - **tmux** (multiplexador de terminal configurado com tema Dracula, cópia automática por seleção de mouse e etiqueta `✦ pasta` no canto direito de cada painel)
 - **GitHub CLI (`gh`)** (para consultar Pull Requests abertos e sincronizar seu fork)
 - **uv** e **espeak-ng** (gerenciamento do ambiente Python 3.11 e fonemizador para o Chatterbox)
@@ -74,13 +73,11 @@ Se você é o dono do repositório, não precisa criar fork nem branch separada.
 gh auth login
 ```
 
-Ao rodar o `instalar.sh`, ele reconhece automaticamente que a conta logada no `gh` é a dona do repositório e já configura o `origin` para fazer os commits e pushes diários direto na sua `main`.
+Ao rodar o `instalar.sh`, ele reconhece automaticamente que a conta logada no `gh` é a dona do repositório e já configura o `origin` apontando para o seu repositório.
 
 ### Caso 2: Outros usuários (Fork ou Branch própria)
 
-O repositório principal aceita `push` apenas do dono original, evitando mistura de vozes e perfis na `main`.
-
-Para que o seu ambiente faça o salvamento e `push` diário automático dos seus próprios áudios (`sons/`, `narracoes/`, `catalogo.json` e `estilo.json`), autentique o `gh` e crie seu fork:
+O repositório principal aceita `push` apenas do dono original. Para manter suas próprias customizações (`sons/`, `catalogo.json` e `estilo.json`), autentique o `gh` e crie seu fork:
 
 ```zsh
 gh auth login
@@ -91,20 +88,6 @@ Em seguida, crie o fork na sua conta do GitHub apontando o `origin` local para e
 ```zsh
 cd ~/.claude/voz && gh repo fork judhagsan/voz --remote=true --remote-name=origin
 ```
-
-Se quiser zerar as narrações antigas para começar o seu acervo do zero no seu fork:
-
-```zsh
-rm -rf ~/.claude/voz/narracoes/* && : > ~/.claude/voz/narracoes.tsv && /usr/bin/python3 -I ~/.claude/voz/comum.py catalogo
-```
-
-Se preferir usar uma branch específica dentro do seu fork (em vez da `main`):
-
-```zsh
-cd ~/.claude/voz && git checkout -b meu-perfil && git push -u origin meu-perfil
-```
-
-O script detecta automaticamente a branch ativa (`HEAD`) e envia todas as atualizações automáticas do banco de vozes para `origin/<sua-branch>`.
 
 ---
 
@@ -140,15 +123,14 @@ voz -w 10
 
 | Arquivo / Pasta | Função |
 | :--- | :--- |
-| `motor_local.py` | Motor de síntese neural local Chatterbox com timbre clonado da Laura, fila assíncrona IPC e trava `flock`. |
+| `motor_local.py` | Motor de síntese neural local Chatterbox com timbre da Laura, saída WAV direta, fila assíncrona IPC e trava `flock`. |
 | `painel.py` | Painel visual de repositórios no terminal (executado pelo comando `voz`). |
 | `voz.sh` | Entrada dos hooks de eventos (`terminei`, `permissao`, `espera` e `pos-tool`). |
-| `comum.py` | Ajuste de tom/velocidade via `ffmpeg`, fila `flock`, catálogo verificado (`catalogo.json`) e sincronização Git. |
-| `narrar.py` | Narração contextual com fila de múltiplos agentes e reaproveitamento de áudios existentes. |
+| `comum.py` | Utilitários de áudio, fila `flock`, catálogo verificado (`catalogo.json`) e sincronização Git. |
+| `narrar.py` | Narração contextual efêmera com fila de múltiplos agentes sob demanda. |
 | `gerar.py` | Geração periódica de novas frases curtas e evolução do perfil em `estilo.json`. |
-| `instalar.sh` | Instalador automático para macOS via terminal (gerencia `ffmpeg`, `tmux`, `gh`, `uv`, `espeak-ng` e `.venv`). |
+| `instalar.sh` | Instalador automático para macOS via terminal (gerencia `tmux`, `gh`, `uv`, `espeak-ng` e `.venv`). |
 | `tmux.conf` | Configuração versionada do `tmux` (vinculada em `~/.tmux.conf`). |
-| `config.json` | Configurações da voz (`Laura`, `tom_voz: 0.90`, `velocidade_voz: 0.91`, motor local). |
-| `catalogo.json` | Relação verificada entre cada arquivo `.mp3` existente no disco, seu texto e suas palavras-chave. |
-| `sons/` | Áudios curtos divididos em `terminei/`, `permissao/` e `espera/`. |
-| `narracoes/` | Áudios de narração contextual organizados por repositório/projeto. |
+| `config.json` | Configurações da voz (`Laura`, motor local). |
+| `catalogo.json` | Relação verificada dos áudios curtos existentes em `sons/`. |
+| `sons/` | Áudios curtos para avisos instantâneos divididos em `terminei/`, `permissao/` e `espera/`. |

@@ -17,10 +17,10 @@ if ! command -v brew >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "==> Verificando e atualizando dependências para as versões mais recentes (ffmpeg, tmux, gh, uv, espeak-ng)..."
+echo "==> Verificando e atualizando dependências para as versões mais recentes (tmux, gh, uv, espeak-ng)..."
 brew update --quiet || true
 
-for pacote in ffmpeg tmux gh uv espeak-ng; do
+for pacote in tmux gh uv espeak-ng; do
   if ! brew list --formula "$pacote" >/dev/null 2>&1; then
     echo "==> Instalando $pacote (versão mais recente)..."
     brew install "$pacote"
@@ -162,7 +162,7 @@ cat > "$DESTINO/.git/hooks/pre-commit" <<'HOOK'
 set -euo pipefail
 REPO_DIR="$(git rev-parse --show-toplevel)"
 /usr/bin/python3 -I "$REPO_DIR/comum.py" catalogo >/dev/null
-git -C "$REPO_DIR" add -- sons narracoes estilo.json catalogo.json historico.tsv narracoes.tsv 2>/dev/null || true
+git -C "$REPO_DIR" add -- sons estilo.json catalogo.json historico.tsv 2>/dev/null || true
 HOOK
 chmod +x "$DESTINO/.git/hooks/pre-commit"
 

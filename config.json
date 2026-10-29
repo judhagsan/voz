@@ -1,15 +1,14 @@
 {
   "motor": "local",
   "voz": "Laura",
-  "tom_voz": 0.90,
-  "velocidade_voz": 0.91,
+  "tom_voz": 1.0,
+  "velocidade_voz": 1.0,
   "modelo_claude": "haiku",
   "intervalo_horas": 24,
   "min_mensagens": 8,
   "max_por_categoria": 0,
   "narrar": {
     "ativo": true,
-    "min_segundos": 0,
-    "guardar_dias": 0
+    "min_segundos": 0
   }
 }

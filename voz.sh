@@ -59,7 +59,7 @@ if [ "$categoria" = terminei ] && [ -z "$VOZ_SIMULAR" ]; then
 fi
 
 shopt -s nullglob
-arquivos=("$BASE/sons/$categoria"/*.mp3)
+arquivos=("$BASE/sons/$categoria"/*.mp3 "$BASE/sons/$categoria"/*.wav)
 shopt -u nullglob
 
 escolhido=""

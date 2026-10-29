@@ -4,7 +4,7 @@
 Roda como um serviço residente em segundo plano (processando pedidos via fila de arquivos
 em estado/fila-motor/) para manter o modelo em memória e gerar áudio em ~6s.
 
-100% local, offline, sem custos de API e sem envio de dados para servidores externos.
+100% local, offline, sem custos de API, sem ffmpeg e sem envio de dados para serviços externos.
 """
 
 import argparse
@@ -12,7 +12,6 @@ import fcntl
 import io
 import json
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -40,30 +39,21 @@ def _garantir_condicionais(model):
     if not REF_WAV.is_file():
         som_padrao = BASE / "sons" / "terminei" / "Pronto por aqui, já pode conferir!.mp3"
         if som_padrao.is_file():
-            subprocess.run(["ffmpeg", "-y", "-i", str(som_padrao), "-ar", "24000", "-ac", "1", str(REF_WAV)], check=True)
+            import soundfile as sf
+            import torch
+            import torchaudio.functional as F
+            dados, sr = sf.read(str(som_padrao))
+            tensor = torch.from_numpy(dados).float()
+            if tensor.ndim > 1:
+                tensor = tensor.mean(dim=-1, keepdim=True).t()
+            else:
+                tensor = tensor.unsqueeze(0)
+            if sr != 24000:
+                tensor = F.resample(tensor, sr, 24000)
+            sf.write(str(REF_WAV), tensor.squeeze(0).numpy(), 24000, format="WAV")
     model.prepare_conditionals(str(REF_WAV), exaggeration=0.35)
     model.conds.save(str(CONDS_FILE))
     print(f"[motor_local] Condicionais salvas em {CONDS_FILE}", flush=True)
-
-
-def _caminho_ffmpeg():
-    ff = "/opt/homebrew/bin/ffmpeg"
-    if os.path.exists(ff):
-        return ff
-    return shutil.which("ffmpeg") or "ffmpeg"
-
-
-def _converter_para_mp3(wav_bytes, sr=24000, tom=0.90, vel=0.91):
-    """Converte o áudio WAV do Chatterbox para MP3 aplicando ajustes de tom e velocidade."""
-    ffmpeg = _caminho_ffmpeg()
-    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-f", "wav", "-i", "pipe:0"]
-    if abs(tom - 1.0) > 0.01 or abs(vel - 1.0) > 0.01:
-        atempo = max(0.5, min(2.0, vel / tom))
-        filtro = f"asetrate={sr}*{tom:.4f},aresample={sr},atempo={atempo:.4f}"
-        cmd.extend(["-af", filtro])
-    cmd.extend(["-b:a", "128k", "-f", "mp3", "pipe:1"])
-    r = subprocess.run(cmd, input=wav_bytes, capture_output=True)
-    return r.stdout if r.returncode == 0 and r.stdout else wav_bytes
 
 
 def rodar_daemon():
@@ -138,14 +128,12 @@ def rodar_daemon():
 
             for p_req in pedidos:
                 req_id = p_req.stem.replace("req_", "")
-                p_resp_mp3 = FILA_DIR / f"resp_{req_id}.mp3"
+                p_resp_wav = FILA_DIR / f"resp_{req_id}.wav"
                 p_pronto = FILA_DIR / f"resp_{req_id}.pronto"
 
                 try:
                     conteudo = json.loads(p_req.read_text(encoding="utf-8"))
                     texto = conteudo.get("texto", "").strip()
-                    tom = float(conteudo.get("tom_voz", 0.90))
-                    vel = float(conteudo.get("velocidade_voz", 0.91))
                     exag = float(conteudo.get("exaggeration", 0.35))
                     cfg_w = float(conteudo.get("cfg_weight", 0.5))
 
@@ -159,13 +147,10 @@ def rodar_daemon():
                     )
                     dur = time.time() - t1
 
-                    buf_wav = io.BytesIO()
-                    sf.write(buf_wav, wav.squeeze().cpu().numpy(), model.sr, format="WAV")
-                    mp3_bytes = _converter_para_mp3(buf_wav.getvalue(), sr=model.sr, tom=tom, vel=vel)
-
-                    p_resp_mp3.write_bytes(mp3_bytes)
+                    sf.write(str(p_resp_wav), wav.squeeze().cpu().numpy(), model.sr, format="WAV")
                     p_pronto.write_text(json.dumps({"sucesso": True, "duracao": dur}), encoding="utf-8")
-                    print(f"[motor_local] Sintetizado em {dur:.2f}s ({len(mp3_bytes)} bytes): {texto[:40]}...", flush=True)
+                    tamanho = p_resp_wav.stat().st_size if p_resp_wav.is_file() else 0
+                    print(f"[motor_local] Sintetizado em {dur:.2f}s ({tamanho} bytes WAV): {texto[:40]}...", flush=True)
                 except Exception as e:
                     p_pronto.write_text(json.dumps({"sucesso": False, "erro": str(e)}), encoding="utf-8")
                 finally:
@@ -214,20 +199,18 @@ def garantir_daemon_iniciado():
     return False
 
 
-def sintetizar(texto, tom_voz=0.90, velocidade_voz=0.91, timeout=40):
+def sintetizar(texto, tom_voz=1.0, velocidade_voz=1.0, timeout=40):
     """Envia pedido para o serviço de voz em background via fila de arquivos."""
     FILA_DIR.mkdir(parents=True, exist_ok=True)
     garantir_daemon_iniciado()
 
     req_id = f"{time.time():.6f}_{os.getpid()}"
     p_req = FILA_DIR / f"req_{req_id}.json"
-    p_resp_mp3 = FILA_DIR / f"resp_{req_id}.mp3"
+    p_resp_wav = FILA_DIR / f"resp_{req_id}.wav"
     p_pronto = FILA_DIR / f"resp_{req_id}.pronto"
 
     payload = {
         "texto": texto,
-        "tom_voz": tom_voz,
-        "velocidade_voz": velocidade_voz,
     }
     p_req.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
@@ -238,11 +221,11 @@ def sintetizar(texto, tom_voz=0.90, velocidade_voz=0.91, timeout=40):
                 status = json.loads(p_pronto.read_text(encoding="utf-8"))
                 if not status.get("sucesso"):
                     raise RuntimeError(f"Erro na síntese local: {status.get('erro')}")
-                if p_resp_mp3.is_file():
-                    mp3_data = p_resp_mp3.read_bytes()
-                    return mp3_data
+                if p_resp_wav.is_file():
+                    wav_data = p_resp_wav.read_bytes()
+                    return wav_data
             finally:
-                p_resp_mp3.unlink(missing_ok=True)
+                p_resp_wav.unlink(missing_ok=True)
                 p_pronto.unlink(missing_ok=True)
                 p_req.unlink(missing_ok=True)
         time.sleep(0.1)
@@ -296,9 +279,9 @@ if __name__ == "__main__":
         t0 = time.time()
         print(f"Sintetizando: \"{args.texto}\"...")
         audio = sintetizar(args.texto)
-        out_mp3 = ESTADO / "teste_cliente.mp3"
-        out_mp3.write_bytes(audio)
-        print(f"Áudio recebido ({len(audio)} bytes) em {time.time()-t0:.2f}s e salvo em {out_mp3}")
-        subprocess.run(["afplay", str(out_mp3)])
+        out_wav = ESTADO / "teste_cliente.wav"
+        out_wav.write_bytes(audio)
+        print(f"Áudio recebido ({len(audio)} bytes WAV) em {time.time()-t0:.2f}s e salvo em {out_wav}")
+        subprocess.run(["afplay", str(out_wav)])
     else:
         parser.print_help()

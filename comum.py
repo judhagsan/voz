@@ -62,32 +62,13 @@ def salvar_estilo(estilo):
     ESTILO.write_text(json.dumps(estilo, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def ajustar_tom(audio, fator, velocidade=1.0):
-    """Altera o tom (pitch) e a velocidade do MP3 via ffmpeg."""
-    if (not fator or abs(fator - 1.0) < 0.01) and (not velocidade or abs(velocidade - 1.0) < 0.01):
-        return audio
-    ffmpeg = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
-    if not os.path.exists(ffmpeg):
-        return audio
-    atempo = max(0.5, min(2.0, float(velocidade) / float(fator)))
-    filtro = "asetrate=44100*%.4f,aresample=44100,atempo=%.4f" % (fator, atempo)
-    r = subprocess.run(
-        [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "mp3", "-i", "pipe:0", "-af", filtro, "-b:a", "128k", "-f", "mp3", "pipe:1"],
-        input=audio,
-        capture_output=True,
-    )
-    return r.stdout if r.returncode == 0 and r.stdout else audio
-
-
-def sintetizar(cfg, chave=None, texto=None):
-    """Sintetiza áudio usando o motor local Chatterbox com o timbre da Laura."""
+def sintetizar(cfg=None, chave=None, texto=None):
+    """Sintetiza áudio WAV nativo usando o motor local Chatterbox com o timbre da Laura."""
     if texto is None:
         texto = chave
     from motor_local import sintetizar as sintetizar_local
     texto_limpo = sem_tags(texto)
-    tom = float(cfg.get("tom_voz", 0.90))
-    vel = float(cfg.get("velocidade_voz", 0.91))
-    return sintetizar_local(texto_limpo, tom_voz=tom, velocidade_voz=vel)
+    return sintetizar_local(texto_limpo)
 
 
 def chamar_claude(cfg, pedido, timeout=60):
@@ -197,27 +178,20 @@ def contem_termo_sensivel(texto):
     return any(re.search(p, t) for p in padroes_sessao)
 
 
-def _caminho_ffmpeg():
-    ff = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
-    return ff if os.path.exists(ff) else ""
-
-
-def duracao_mp3(mp3_path):
-    """Mede a duração exata em segundos de um arquivo .mp3 via ffmpeg."""
-    ffmpeg = _caminho_ffmpeg()
-    if not ffmpeg or not mp3_path or not Path(mp3_path).is_file():
+def duracao_audio(caminho):
+    """Mede a duração exata em segundos de um arquivo de áudio via afinfo nativo do macOS."""
+    if not caminho or not Path(caminho).is_file():
         return 0.0
     try:
         r = subprocess.run(
-            [ffmpeg, "-i", str(mp3_path)],
+            ["afinfo", str(caminho)],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=3,
         )
-        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", r.stderr)
+        m = re.search(r"estimated duration:\s*([\d.]+)", r.stdout)
         if m:
-            h, mi, s = int(m.group(1)), int(m.group(2)), float(m.group(3))
-            return round(h * 3600 + mi * 60 + s, 2)
+            return round(float(m.group(1)), 2)
     except Exception:
         pass
     return 0.0
@@ -269,59 +243,13 @@ def perfil_diccao_interpretacao(texto, intencao, mp3_path=None):
             "silabas_estimadas": max(1, len(vogais)),
             "pausas_internas": pausas_internas,
             "sentencas": len(frases),
-            "duracao_s": duracao_mp3(mp3_path) if mp3_path else 0.0,
+            "duracao_s": duracao_audio(mp3_path) if mp3_path else 0.0,
         },
     }
 
 
 def sanitizar_banco():
-    """Limpa metadados de sessão e datas antes de atualizar o banco versionado (apenas áudios inteiros)."""
-    NARRACOES.mkdir(parents=True, exist_ok=True)
-    registros_limpos = {}
-
-    if INDICE_NARRACOES.exists():
-        for linha in INDICE_NARRACOES.read_text(encoding="utf-8").splitlines():
-            partes = linha.split("\t")
-            if len(partes) == 3:
-                nome_arq, intencao, fala = partes[0], partes[1], partes[2]
-                candidatos = [NARRACOES / nome_arq]
-            elif len(partes) >= 4:
-                proj, nome_arq, fala = partes[1], partes[2], partes[3]
-                pasta_proj = re.sub(r"[^\w.-]+", "-", proj).strip("-")
-                candidatos = [NARRACOES / pasta_proj / nome_arq, NARRACOES / nome_arq]
-                intencao = classificar_intencao(fala)
-            else:
-                continue
-
-            mp3_origem = next((c for c in candidatos if c.is_file() and c.stat().st_size > 0), None)
-            if contem_termo_sensivel(fala):
-                if mp3_origem and mp3_origem.exists():
-                    mp3_origem.unlink(missing_ok=True)
-                continue
-            if not mp3_origem:
-                continue
-
-            novo_nome = id_hash_texto(fala) + ".mp3"
-            destino = NARRACOES / novo_nome
-            if mp3_origem.resolve() != destino.resolve():
-                shutil.move(str(mp3_origem), str(destino))
-            registros_limpos[novo_nome] = (intencao, fala)
-
-    for sub in list(NARRACOES.iterdir()):
-        if sub.is_dir():
-            shutil.rmtree(sub, ignore_errors=True)
-        elif sub.is_file() and sub.name not in registros_limpos:
-            sub.unlink(missing_ok=True)
-
-    linhas_tsv = [
-        "%s\t%s\t%s" % (arq, info[0], info[1])
-        for arq, info in sorted(registros_limpos.items())
-    ]
-    INDICE_NARRACOES.write_text(
-        ("\n".join(linhas_tsv) + "\n") if linhas_tsv else "",
-        encoding="utf-8",
-    )
-
+    """Limpa histórico e expressões de estilo garantindo termos sensíveis filtrados."""
     if HISTORICO.exists():
         h_limpo = []
         for linha in HISTORICO.read_text(encoding="utf-8").splitlines():
@@ -352,19 +280,19 @@ def sanitizar_banco():
 
 
 def sincronizar_catalogo():
-    """Sanitiza o banco, verifica os .mp3 inteiros em sons/ e narracoes/ e grava catalogo.json com dicção e interpretação."""
+    """Sanitiza o banco, verifica os áudios em sons/ e grava catalogo.json com dicção e interpretação."""
     sanitizar_banco()
     itens = []
     vistos = set()
 
     if SONS.exists():
-        for mp3 in sorted(SONS.glob("*/*.mp3")):
-            if not mp3.is_file() or mp3.stat().st_size == 0:
+        for arq in sorted(list(SONS.glob("*/*.mp3")) + list(SONS.glob("*/*.wav"))):
+            if not arq.is_file() or arq.stat().st_size == 0:
                 continue
-            rel = str(mp3.relative_to(BASE))
-            cat = mp3.parent.name
-            texto = unicodedata.normalize("NFC", mp3.stem)
-            perfil = perfil_diccao_interpretacao(texto, cat, mp3)
+            rel = str(arq.relative_to(BASE))
+            cat = arq.parent.name
+            texto = unicodedata.normalize("NFC", arq.stem)
+            perfil = perfil_diccao_interpretacao(texto, cat, arq)
             itens.append({
                 "id": id_hash_texto(texto),
                 "arquivo": rel,
@@ -376,37 +304,16 @@ def sincronizar_catalogo():
                 "palavras": palavras_chave(texto),
                 "interpretacao": perfil["interpretacao"],
                 "diccao": perfil["diccao"],
-                "bytes": mp3.stat().st_size,
+                "bytes": arq.stat().st_size,
             })
             vistos.add(rel)
 
-    if INDICE_NARRACOES.exists():
-        for linha in INDICE_NARRACOES.read_text(encoding="utf-8").splitlines():
-            partes = linha.split("\t")
-            if len(partes) < 3:
-                continue
-            nome_arq, intencao, fala = partes[0], partes[1], partes[2]
-            mp3 = NARRACOES / nome_arq
-            if not mp3.is_file() or mp3.stat().st_size == 0:
-                continue
-            rel = str(mp3.relative_to(BASE))
-            if rel in vistos:
-                continue
-            vistos.add(rel)
-            perfil = perfil_diccao_interpretacao(fala, intencao, mp3)
-            itens.append({
-                "id": nome_arq.removesuffix(".mp3"),
-                "arquivo": rel,
-                "tipo": "narracao",
-                "escopo": intencao,
-                "intencao": intencao,
-                "texto": fala,
-                "normalizado": normalizar(fala),
-                "palavras": palavras_chave(fala),
-                "interpretacao": perfil["interpretacao"],
-                "diccao": perfil["diccao"],
-                "bytes": mp3.stat().st_size,
-            })
+    dados = {
+        "total": len(itens),
+        "itens": itens,
+    }
+    CATALOGO.write_text(json.dumps(dados, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return itens
 
     dados = {
         "total": len(itens),
@@ -535,65 +442,6 @@ def agora():
     return datetime.now(timezone.utc).timestamp()
 
 
-CAMINHOS_BANCO = ["sons", "narracoes", "estilo.json", "catalogo.json", "historico.tsv", "narracoes.tsv"]
-
-
-def sincronizar_git(cfg, forcar=False):
-    """Faz commit e push diário da base de vozes e estilo se houver alterações."""
-    marca = ESTADO / "ultimo-sync"
-    intervalo = cfg.get("intervalo_horas", 24) * 3600
-    if not forcar and marca.exists() and time.time() - marca.stat().st_mtime < intervalo:
-        return False
-    marca.touch()
-    sincronizar_catalogo()
-
-    alvos = [c for c in CAMINHOS_BANCO if (BASE / c).exists()]
-    if not alvos:
-        return False
-    status = subprocess.run(
-        ["git", "-C", str(BASE), "status", "--porcelain", "--", *alvos],
-        capture_output=True,
-        text=True,
-    )
-    if status.returncode != 0 or not status.stdout.strip():
-        return False
-
-    subprocess.run(["git", "-C", str(BASE), "add", "--", *alvos], check=True)
-    msg = (
-        "chore(banco): sincroniza base diária de vozes e perfil de estilo\n\n"
-        "Registra no repositório os novos áudios sintetizados, narrações e a\n"
-        "evolução do vocabulário acumulado nas sessões do dia, preservando o\n"
-        "histórico completo sem sobrescrever alterações manuais de código."
-    )
-    r_commit = subprocess.run(
-        ["git", "-C", str(BASE), "commit", "-m", msg],
-        capture_output=True,
-        text=True,
-    )
-    if r_commit.returncode != 0:
-        log("git commit ignorado: " + (r_commit.stderr or r_commit.stdout).strip()[:200])
-        return False
-
-    r_branch = subprocess.run(
-        ["git", "-C", str(BASE), "symbolic-ref", "--short", "HEAD"],
-        capture_output=True,
-        text=True,
-    )
-    branch = r_branch.stdout.strip() if r_branch.returncode == 0 and r_branch.stdout.strip() else "main"
-
-    r_push = subprocess.run(
-        ["git", "-C", str(BASE), "push", "-u", "origin", branch],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    if r_push.returncode != 0:
-        log("git push falhou: " + (r_push.stderr or r_push.stdout).strip()[:200])
-        return False
-    log(f"git sync: alterações do banco enviadas para origin/{branch}")
-    return True
-
-
 def comando_autorizado_agy(cmd):
     """Verifica se todos os subcomandos do CommandLine já constam em permissions.allow da CLI."""
     cfg_agy = Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
@@ -601,7 +449,7 @@ def comando_autorizado_agy(cmd):
         return False
     try:
         allow = set(json.loads(cfg_agy.read_text(encoding="utf-8")).get("permissions", {}).get("allow", []))
-    except ValueError:
+    except (ValueError, OSError):
         return False
     if f"command({cmd})" in allow:
         return True
@@ -633,29 +481,7 @@ def comando_autorizado_agy(cmd):
     return True
 
 
-def comando_em_execucao(cmd):
-    """Retorna True se o comando já foi aprovado pela CLI e está rodando em processo filho."""
-    trecho = cmd.strip().splitlines()[0][:40].strip()
-    if len(trecho) < 2:
-        return False
-    try:
-        saida = subprocess.run(
-            ["ps", "-axo", "args="],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        ).stdout
-    except (subprocess.SubprocessError, OSError):
-        return False
-    for linha in saida.splitlines():
-        if "comum.py agy-permissao" in linha or "voz.sh" in linha:
-            continue
-        if trecho in linha:
-            return True
-    return False
-
-
-def agy_precisa_permissao(token):
+def agy_precisa_permissao(_token):
     """Retorna True se a ferramenta na CLI parou aguardando aprovação do usuário."""
     import sys
 
@@ -668,21 +494,20 @@ def agy_precisa_permissao(token):
     args = tc.get("args") or {}
 
     if nome == "ask_question":
+        time.sleep(1.0)
         return True
 
-    cmd = str(args.get("CommandLine", "")).strip()
-    if nome == "run_command" and comando_autorizado_agy(cmd):
-        return False
+    if nome == "run_command":
+        # Comandos em sandbox padrão rodam automaticamente e nunca pedem aprovação
+        if args.get("BypassSandbox") is not True:
+            return False
+        # Apenas comandos que pedem para sair do sandbox solicitam aprovação manual
+        cmd = str(args.get("CommandLine", "")).strip()
+        if comando_autorizado_agy(cmd):
+            return False
+        return True
 
-    pendente = ESTADO / "agy-pendente"
-    time.sleep(2.0)
-    # Se PostToolUse já limpou ou outro tool call entrou no lugar, já executou sem parar.
-    if not pendente.exists() or pendente.read_text(encoding="utf-8").strip() != token:
-        return False
-    # Se o comando já está em execução no sistema operacional, a CLI já o aprovou.
-    if nome == "run_command" and cmd and comando_em_execucao(cmd):
-        return False
-    return True
+    return False
 
 
 if __name__ == "__main__":
