@@ -29,15 +29,18 @@ Sistema de avisos falados, narração contextual por projeto, painel visual de r
 
 ## Pré-requisitos
 
+O instalador verifica e atualiza automaticamente para as versões mais recentes via Homebrew:
+
 - **macOS** (usa `afplay` e `security` nativos do sistema)
 - **ffmpeg** (prioritário/obrigatório para manter o tom `0.90` e a cadência `0.91` da voz sempre idênticos)
+- **tmux** (multiplexador de terminal configurado com tema Dracula, cópia automática por seleção de mouse e etiqueta `✦ pasta` no canto direito de cada painel)
 - **GitHub CLI (`gh`)** (para consultar Pull Requests abertos e sincronizar seu fork)
 
 ---
 
 ## 1. Instalação via Terminal
 
-Para instalar direto no terminal (já garante o `ffmpeg`, clona em `~/.claude/voz`, cria o comando `voz` em `~/.local/bin/voz` e configura os hooks):
+Para instalar direto no terminal (instala/atualiza `ffmpeg`, `tmux` e `gh` para a última versão, clona em `~/.claude/voz`, vincula o `~/.tmux.conf`, cria o comando `voz` em `~/.local/bin/voz` e configura os hooks):
 
 ```zsh
 curl -fsSL https://raw.githubusercontent.com/judhagsan/voz/main/instalar.sh | bash
@@ -157,7 +160,8 @@ voz -w 10
 | `comum.py` | Cliente ElevenLabs, ajuste de tom/velocidade via `ffmpeg`, trava `flock`, catálogo verificado (`catalogo.json`) e sincronização Git. |
 | `narrar.py` | Narração contextual com fila de múltiplos agentes e reaproveitamento de áudios existentes. |
 | `gerar.py` | Geração periódica de novas frases curtas e evolução do perfil em `estilo.json`. |
-| `instalar.sh` | Instalador automático para macOS via terminal. |
+| `instalar.sh` | Instalador automático para macOS via terminal (garante versões mais recentes de `ffmpeg`, `tmux` e `gh`). |
+| `tmux.conf` | Configuração versionada do `tmux` (vinculada em `~/.tmux.conf`). |
 | `config.json` | Configurações da voz (`Laura`, `tom_voz: 0.90`, `velocidade_voz: 0.91`), modelo (`eleven_v4`) e limites. |
 | `catalogo.json` | Relação verificada entre cada arquivo `.mp3` existente no disco, seu texto e suas palavras-chave. |
 | `sons/` | Áudios curtos divididos em `terminei/`, `permissao/` e `espera/`. |

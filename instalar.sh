@@ -11,23 +11,26 @@ if ! command -v brew >/dev/null 2>&1 && [ -x /opt/homebrew/bin/brew ]; then
   eval "$(/opt/homebrew/bin/brew shellenv)"
 fi
 
-if ! command -v ffmpeg >/dev/null 2>&1 && [ ! -x /opt/homebrew/bin/ffmpeg ]; then
-  if command -v brew >/dev/null 2>&1; then
-    echo "==> Instalando ffmpeg (necessário para manter o tom e a cadência da voz)..."
-    brew install ffmpeg
-  else
-    echo "ERRO: ffmpeg não encontrado e Homebrew não está instalado."
-    echo "Instale o Homebrew (https://brew.sh) e rode: brew install ffmpeg"
-    exit 1
-  fi
+if ! command -v brew >/dev/null 2>&1; then
+  echo "ERRO: Homebrew não encontrado."
+  echo "Instale o Homebrew (https://brew.sh) e rode o instalador novamente."
+  exit 1
 fi
 
-if ! command -v gh >/dev/null 2>&1 && [ ! -x /opt/homebrew/bin/gh ]; then
-  if command -v brew >/dev/null 2>&1; then
-    echo "==> Instalando GitHub CLI (gh)..."
-    brew install gh
+echo "==> Verificando e atualizando dependências para as versões mais recentes (ffmpeg, tmux, gh)..."
+brew update --quiet || true
+
+for pacote in ffmpeg tmux gh; do
+  if ! brew list --formula "$pacote" >/dev/null 2>&1; then
+    echo "==> Instalando $pacote (versão mais recente)..."
+    brew install "$pacote"
+  elif [ -n "$(brew outdated --formula "$pacote" 2>/dev/null)" ]; then
+    echo "==> Atualizando $pacote para a versão mais recente..."
+    brew upgrade "$pacote"
+  else
+    echo "==> $pacote já está na versão mais recente."
   fi
-fi
+done
 
 mkdir -p "$HOME/.claude" "$BIN_DIR"
 
@@ -52,6 +55,14 @@ fi
 
 chmod +x "$DESTINO/voz.sh" "$DESTINO/painel.py" "$DESTINO/instalar.sh"
 ln -sf "$DESTINO/painel.py" "$BIN_DIR/voz"
+
+if [ -f "$DESTINO/tmux.conf" ]; then
+  ln -sf "$DESTINO/tmux.conf" "$HOME/.tmux.conf"
+  echo "==> Configuração do tmux vinculada em ~/.tmux.conf."
+  if command -v tmux >/dev/null 2>&1 && tmux list-sessions >/dev/null 2>&1; then
+    tmux source-file "$HOME/.tmux.conf" >/dev/null 2>&1 || true
+  fi
+fi
 
 if ! grep -qs '\.local/bin' "$HOME/.zshrc" 2>/dev/null; then
   printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >>"$HOME/.zshrc"
