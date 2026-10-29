@@ -1,10 +1,13 @@
 mod agy;
 mod audio;
 mod cotas;
+mod elevenlabs;
 mod fala;
 mod fonetica;
 mod gemini;
+mod keychain;
 mod narrar;
+mod openai;
 mod painel;
 mod resumo;
 mod tela;

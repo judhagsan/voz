@@ -40,13 +40,13 @@ pub fn tocar(base: &Path, arquivo: &Path) {
     });
 }
 
-/// Voz de reserva do macOS, para quando o Gemini não responde.
-/// Usa voz feminina nativa (Luciana) para manter coerência com o Gemini.
+/// Voz de reserva do macOS, para quando nenhuma API de IA responde.
+/// Usa a voz neural nativa da Siri (Voz 2) do macOS 27.
 pub fn dizer(base: &Path, texto: &str) {
     let voz_reserva = crate::fala::ler_config(base)
         .pointer("/reserva/voz")
         .and_then(|v| v.as_str())
-        .unwrap_or("Luciana")
+        .unwrap_or("Voz 2")
         .to_string();
     com_trava(base, || {
         let status = Command::new("say")
