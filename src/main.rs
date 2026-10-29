@@ -1,5 +1,6 @@
 mod agy;
 mod audio;
+mod cotas;
 mod fonetica;
 mod ipc;
 mod narrar;

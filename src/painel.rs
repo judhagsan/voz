@@ -7,13 +7,14 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-const RESET: &str = "\x1b[0m";
-const NEGRITO: &str = "\x1b[1m";
-const FRACO: &str = "\x1b[2m";
-const VERDE: &str = "\x1b[32m";
-const AMARELO: &str = "\x1b[33m";
-const AZUL: &str = "\x1b[36m";
-const MAGENTA: &str = "\x1b[35m";
+pub(crate) const RESET: &str = "\x1b[0m";
+pub(crate) const NEGRITO: &str = "\x1b[1m";
+pub(crate) const FRACO: &str = "\x1b[2m";
+pub(crate) const VERDE: &str = "\x1b[32m";
+pub(crate) const AMARELO: &str = "\x1b[33m";
+pub(crate) const AZUL: &str = "\x1b[36m";
+pub(crate) const MAGENTA: &str = "\x1b[35m";
+pub(crate) const VERMELHO: &str = "\x1b[31m";
 
 const PASTAS_IGNORADAS: &[&str] = &[
     "Library",
@@ -52,13 +53,13 @@ pub struct RepoStatus {
     pub em_andamento: bool,
 }
 
-fn largura_visivel(texto: &str) -> usize {
+pub(crate) fn largura_visivel(texto: &str) -> usize {
     let re = Regex::new(r"\x1b\[[0-9;]*m").unwrap();
     let limpo = re.replace_all(texto, "");
     limpo.chars().count()
 }
 
-fn alinhar(texto: &str, largura: usize) -> String {
+pub(crate) fn alinhar(texto: &str, largura: usize) -> String {
     let vis = largura_visivel(texto);
     let falta = largura.saturating_sub(vis);
     format!("{}{}", texto, " ".repeat(falta))
@@ -413,7 +414,7 @@ fn formatar_pr(d: &RepoStatus) -> String {
     format!("{AZUL}{}{RESET}", partes.join(", "))
 }
 
-pub fn renderizar_quadro(dados: &[RepoStatus], apenas_ativos: bool) -> String {
+pub fn renderizar_quadro_repos(dados: &[RepoStatus], apenas_ativos: bool) -> Vec<String> {
     let exibidos: Vec<&RepoStatus> = if apenas_ativos {
         dados.iter().filter(|d| d.em_andamento).collect()
     } else {
@@ -509,7 +510,7 @@ pub fn renderizar_quadro(dados: &[RepoStatus], apenas_ativos: bool) -> String {
         );
         saida.push(format!("│ {vazio} │"));
         saida.push(format!("╰─{}─╯", "─".repeat(largura_interna)));
-        return saida.join("\n");
+        return saida;
     }
 
     for (c0, c1, c2, c3) in linhas_formatadas {
@@ -523,6 +524,47 @@ pub fn renderizar_quadro(dados: &[RepoStatus], apenas_ativos: bool) -> String {
     }
     saida.push(base_caixa);
 
+    saida
+}
+
+pub fn renderizar_quadro(
+    dados: &[RepoStatus],
+    apenas_ativos: bool,
+    cotas: Option<&crate::cotas::Cotas>,
+) -> String {
+    let linhas_esq = renderizar_quadro_repos(dados, apenas_ativos);
+    let linhas_dir = crate::cotas::renderizar_card(cotas, chrono::Local::now());
+
+    let largura_esq = largura_visivel(linhas_esq.first().map(|s| s.as_str()).unwrap_or(""));
+    let largura_dir = largura_visivel(linhas_dir.first().map(|s| s.as_str()).unwrap_or(""));
+
+    let mut saida = Vec::new();
+    let max_linhas = linhas_esq.len().max(linhas_dir.len());
+    for i in 0..max_linhas {
+        let esq = if let Some(l) = linhas_esq.get(i) {
+            let vis = largura_visivel(l);
+            if vis < largura_esq {
+                format!("{}{}", l, " ".repeat(largura_esq.saturating_sub(vis)))
+            } else {
+                l.clone()
+            }
+        } else {
+            " ".repeat(largura_esq)
+        };
+
+        let dir = if let Some(l) = linhas_dir.get(i) {
+            let vis = largura_visivel(l);
+            if vis < largura_dir {
+                format!("{}{}", l, " ".repeat(largura_dir.saturating_sub(vis)))
+            } else {
+                l.clone()
+            }
+        } else {
+            " ".repeat(largura_dir)
+        };
+
+        saida.push(format!("{}  {}", esq, dir));
+    }
     saida.join("\n")
 }
 
@@ -598,6 +640,21 @@ pub fn rodar_painel(base: &Path, apenas_ativos: bool, watch: Option<f64>) {
             thread::sleep(Duration::from_secs(15));
         });
 
+        // As CLIs levam até alguns segundos para responder; a consulta fica fora
+        // do laço de desenho para o quadro não travar enquanto elas respondem.
+        let cotas_mutex = Arc::new(Mutex::new(crate::cotas::ler_cache(base)));
+        let base_cotas = base.to_path_buf();
+        let cotas_clone = Arc::clone(&cotas_mutex);
+        thread::spawn(move || loop {
+            // Outro painel aberto pode ter atualizado o cache em disco.
+            let leitura = match crate::cotas::ler_cache(&base_cotas) {
+                Some(c) if crate::cotas::fresca(&c) => c,
+                _ => crate::cotas::atualizar(&base_cotas),
+            };
+            *cotas_clone.lock().unwrap() = Some(leitura);
+            thread::sleep(Duration::from_secs(30));
+        });
+
         let dados_iniciais = coletar_status(base, &repos, &cache_mutex.lock().unwrap());
         let trechos_iniciais = montar_trechos_resumo(&dados_iniciais);
         let base_audio = base.to_path_buf();
@@ -622,7 +679,8 @@ pub fn rodar_painel(base: &Path, apenas_ativos: bool, watch: Option<f64>) {
         loop {
             let cache_snapshot = cache_mutex.lock().unwrap().clone();
             let dados = coletar_status(base, &repos, &cache_snapshot);
-            let quadro = renderizar_quadro(&dados, apenas_ativos);
+            let cotas = cotas_mutex.lock().unwrap().clone();
+            let quadro = renderizar_quadro(&dados, apenas_ativos, cotas.as_ref());
 
             if quadro != ultimo_quadro {
                 print!("\x1b[H{}\x1b[J", quadro);
@@ -668,8 +726,9 @@ pub fn rodar_painel(base: &Path, apenas_ativos: bool, watch: Option<f64>) {
         let cache_snapshot = cache_mutex.lock().unwrap().clone();
         let t0 = Instant::now();
         let dados = coletar_status(base, &repos, &cache_snapshot);
+        let cotas = crate::cotas::obter(base);
         let dur = t0.elapsed();
-        println!("{}", renderizar_quadro(&dados, apenas_ativos));
+        println!("{}", renderizar_quadro(&dados, apenas_ativos, Some(&cotas)));
         eprintln!("{FRACO}Varredura concluída em {dur:?}{RESET}");
     }
 }
