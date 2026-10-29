@@ -315,6 +315,7 @@ name = "voz"
 version = "0.2.0"
 dependencies = [
  "chrono",
+ "libc",
  "regex",
  "serde_json",
 ]

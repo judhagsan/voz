@@ -5,6 +5,7 @@ mod fonetica;
 mod ipc;
 mod narrar;
 mod painel;
+mod tela;
 mod transcript;
 
 use std::fs;

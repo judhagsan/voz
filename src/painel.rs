@@ -531,41 +531,11 @@ pub fn renderizar_quadro(
     dados: &[RepoStatus],
     apenas_ativos: bool,
     cotas: Option<&crate::cotas::Cotas>,
+    largura_tela: Option<usize>,
 ) -> String {
     let linhas_esq = renderizar_quadro_repos(dados, apenas_ativos);
     let linhas_dir = crate::cotas::renderizar_card(cotas, chrono::Local::now());
-
-    let largura_esq = largura_visivel(linhas_esq.first().map(|s| s.as_str()).unwrap_or(""));
-    let largura_dir = largura_visivel(linhas_dir.first().map(|s| s.as_str()).unwrap_or(""));
-
-    let mut saida = Vec::new();
-    let max_linhas = linhas_esq.len().max(linhas_dir.len());
-    for i in 0..max_linhas {
-        let esq = if let Some(l) = linhas_esq.get(i) {
-            let vis = largura_visivel(l);
-            if vis < largura_esq {
-                format!("{}{}", l, " ".repeat(largura_esq.saturating_sub(vis)))
-            } else {
-                l.clone()
-            }
-        } else {
-            " ".repeat(largura_esq)
-        };
-
-        let dir = if let Some(l) = linhas_dir.get(i) {
-            let vis = largura_visivel(l);
-            if vis < largura_dir {
-                format!("{}{}", l, " ".repeat(largura_dir.saturating_sub(vis)))
-            } else {
-                l.clone()
-            }
-        } else {
-            " ".repeat(largura_dir)
-        };
-
-        saida.push(format!("{}  {}", esq, dir));
-    }
-    saida.join("\n")
+    crate::tela::juntar_colunas(&linhas_esq, &linhas_dir, largura_tela)
 }
 
 pub fn montar_trechos_resumo(dados: &[RepoStatus]) -> Vec<String> {
@@ -673,20 +643,32 @@ pub fn rodar_painel(base: &Path, apenas_ativos: bool, watch: Option<f64>) {
             }
         });
 
-        print!("\x1b[2J\x1b[H\x1b[?25l");
+        crate::tela::esconder_cursor_ate_sair();
+        print!("\x1b[2J\x1b[H");
         let mut ultimo_quadro = String::new();
+        let mut ultimo_tamanho = None;
 
         loop {
             let cache_snapshot = cache_mutex.lock().unwrap().clone();
             let dados = coletar_status(base, &repos, &cache_snapshot);
             let cotas = cotas_mutex.lock().unwrap().clone();
-            let quadro = renderizar_quadro(&dados, apenas_ativos, cotas.as_ref());
+            let tamanho = crate::tela::tamanho();
+            let quadro =
+                renderizar_quadro(&dados, apenas_ativos, cotas.as_ref(), tamanho.map(|t| t.0));
+            let tela = crate::tela::ajustar(&quadro, tamanho);
 
-            if quadro != ultimo_quadro {
-                print!("\x1b[H{}\x1b[J", quadro);
+            // Redimensionar reorganiza o que já estava na tela; só redesenhar
+            // por cima deixaria pedaços do quadro antigo, então limpa tudo.
+            if tamanho != ultimo_tamanho {
+                print!("\x1b[2J");
+                ultimo_tamanho = tamanho;
+                ultimo_quadro.clear();
+            }
+            if tela != ultimo_quadro {
+                print!("\x1b[H{}\x1b[J", tela);
                 use std::io::Write;
                 std::io::stdout().flush().ok();
-                ultimo_quadro = quadro;
+                ultimo_quadro = tela;
             }
 
             thread::sleep(intervalo);
@@ -728,7 +710,11 @@ pub fn rodar_painel(base: &Path, apenas_ativos: bool, watch: Option<f64>) {
         let dados = coletar_status(base, &repos, &cache_snapshot);
         let cotas = crate::cotas::obter(base);
         let dur = t0.elapsed();
-        println!("{}", renderizar_quadro(&dados, apenas_ativos, Some(&cotas)));
+        let largura_tela = crate::tela::tamanho().map(|t| t.0);
+        println!(
+            "{}",
+            renderizar_quadro(&dados, apenas_ativos, Some(&cotas), largura_tela)
+        );
         eprintln!("{FRACO}Varredura concluída em {dur:?}{RESET}");
     }
 }

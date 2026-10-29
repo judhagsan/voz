@@ -8,6 +8,7 @@ description = "Orquestrador de voz e despachante nativo para terminal e hooks de
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 serde_json = "1.0"
+libc = "0.2"
 regex = "1.10"
 
 [[bin]]
