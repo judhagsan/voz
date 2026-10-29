@@ -19,6 +19,7 @@ SONS = BASE / "sons"
 NARRACOES = BASE / "narracoes"
 ESTADO = BASE / "estado"
 CONFIG = BASE / "config.json"
+FONETICA = BASE / "fonetica.json"
 ESTILO = BASE / "estilo.json"
 CATALOGO = BASE / "catalogo.json"
 HISTORICO = BASE / "historico.tsv"
@@ -62,13 +63,37 @@ def salvar_estilo(estilo):
     ESTILO.write_text(json.dumps(estilo, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def carregar_fonetica():
+    """Carrega o dicionário de pronúncia técnica de fonetica.json."""
+    if FONETICA.is_file():
+        try:
+            return json.loads(FONETICA.read_text(encoding="utf-8")).get("termos", {})
+        except (ValueError, OSError):
+            pass
+    return {}
+
+
+def ajustar_fonetica(texto):
+    """Substitui termos técnicos e siglas pelas suas formas fonéticas em pt-BR."""
+    if not texto:
+        return ""
+    termos = carregar_fonetica()
+    for padrao, subst in termos.items():
+        try:
+            texto = re.sub(padrao, subst, texto, flags=re.IGNORECASE)
+        except re.error:
+            continue
+    return texto
+
+
 def sintetizar(cfg=None, chave=None, texto=None):
     """Sintetiza áudio WAV nativo usando o motor local Chatterbox com o timbre da Laura."""
     if texto is None:
         texto = chave
     from motor_local import sintetizar as sintetizar_local
     texto_limpo = sem_tags(texto)
-    return sintetizar_local(texto_limpo)
+    texto_fonetico = ajustar_fonetica(texto_limpo)
+    return sintetizar_local(texto_fonetico)
 
 
 def chamar_claude(cfg, pedido, timeout=60):

@@ -204,6 +204,12 @@ def sintetizar(texto, tom_voz=1.0, velocidade_voz=1.0, timeout=40):
     FILA_DIR.mkdir(parents=True, exist_ok=True)
     garantir_daemon_iniciado()
 
+    try:
+        from comum import ajustar_fonetica
+        texto = ajustar_fonetica(texto)
+    except Exception:
+        pass
+
     req_id = f"{time.time():.6f}_{os.getpid()}"
     p_req = FILA_DIR / f"req_{req_id}.json"
     p_resp_wav = FILA_DIR / f"resp_{req_id}.wav"

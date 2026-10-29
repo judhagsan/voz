@@ -1,0 +1,23 @@
+{
+  "descricao": "Dicionário de pronúncia fonética para termos técnicos no sintetizador pt-BR.",
+  "termos": {
+    "\\bgithub\\b": "Guít-râb",
+    "\\bgitlab\\b": "Guít-lébi",
+    "\\bgit\\b": "Guite",
+    "\\bapis\\b": "A P Is",
+    "\\bapi\\b": "A P I",
+    "\\bprs\\b": "P Rs",
+    "\\bpr\\b": "P R",
+    "\\bcli\\b": "C L I",
+    "\\burls\\b": "U R Ls",
+    "\\burl\\b": "U R L",
+    "\\bui\\b": "U I",
+    "\\bjson\\b": "Jêison",
+    "\\byaml\\b": "iâmol",
+    "\\bsql\\b": "ése-quê-éle",
+    "\\bwav\\b": "uáve",
+    "\\bdeploy\\b": "deplói",
+    "\\bbugs\\b": "báguis",
+    "\\bbug\\b": "bágui"
+  }
+}
