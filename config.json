@@ -1,9 +1,15 @@
 {
   "gemini": {
-    "modelo": "gemini-3.8-flash-tts",
+    "modelos": [
+      "gemini-3.8-flash-tts",
+      "gemini-3.8-flash-lite-tts"
+    ],
     "voz": "Vindemiatrix",
     "estilo": "Português do Brasil, sotaque brasileiro. Voz feminina calma, natural e profissional.",
     "modelo_resumo": "gemini-3.5-flash-lite"
+  },
+  "reserva": {
+    "voz": "Luciana"
   },
   "frases": {
     "terminei": ["Pronto por aqui, já pode conferir!"],

@@ -17,7 +17,7 @@ const SERVICO_CHAVE: &str = "gemini-api-key";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
-    pub modelo: String,
+    pub modelos: Vec<String>,
     pub voz: String,
     pub estilo: String,
     /// Modelo de texto que escreve o resumo da narração.
@@ -35,8 +35,33 @@ impl Config {
                 .unwrap_or(padrao)
                 .to_string()
         };
+        let modelos = bloco
+            .and_then(|b| b.get("modelos"))
+            .and_then(|m| m.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|m| !m.is_empty())
+            .or_else(|| {
+                bloco
+                    .and_then(|b| b.get("modelo"))
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                    .map(|s| vec![s.to_string()])
+            })
+            .unwrap_or_else(|| {
+                vec![
+                    "gemini-3.8-flash-tts".to_string(),
+                    "gemini-3.8-flash-lite-tts".to_string(),
+                ]
+            });
+
         Config {
-            modelo: campo("modelo", "gemini-3.8-flash-tts"),
+            modelos,
             voz: campo("voz", "Vindemiatrix"),
             estilo: campo(
                 "estilo",
@@ -45,23 +70,57 @@ impl Config {
             modelo_resumo: campo("modelo_resumo", "gemini-3.5-flash-lite"),
         }
     }
+
+    #[cfg(test)]
+    pub fn modelo_principal(&self) -> &str {
+        self.modelos
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("gemini-3.8-flash-tts")
+    }
 }
 
-pub(crate) fn chave() -> Result<String, String> {
+pub(crate) fn chaves() -> Vec<String> {
+    let mut lista = Vec::new();
+    if let Ok(c) = ler_chave_keychain(SERVICO_CHAVE) {
+        lista.push(c);
+    }
+    let mut idx = 2;
+    loop {
+        let servico = format!("{SERVICO_CHAVE}-{idx}");
+        match ler_chave_keychain(&servico) {
+            Ok(c) => {
+                lista.push(c);
+                idx += 1;
+            }
+            Err(_) => break,
+        }
+    }
+    lista
+}
+
+fn ler_chave_keychain(servico: &str) -> Result<String, String> {
     let saida = Command::new("security")
-        .args(["find-generic-password", "-s", SERVICO_CHAVE, "-w"])
+        .args(["find-generic-password", "-s", servico, "-w"])
         .output()
         .map_err(|e| e.to_string())?;
     let chave = String::from_utf8_lossy(&saida.stdout).trim().to_string();
     if chave.is_empty() {
-        return Err(format!("sem chave no Keychain ({SERVICO_CHAVE})"));
+        return Err(format!("sem chave no Keychain ({servico})"));
     }
     Ok(chave)
 }
 
-pub fn corpo_pedido(cfg: &Config, texto: &str) -> serde_json::Value {
+pub(crate) fn chave() -> Result<String, String> {
+    chaves()
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("sem chave no Keychain ({SERVICO_CHAVE})"))
+}
+
+pub fn corpo_pedido(modelo: &str, cfg: &Config, texto: &str) -> serde_json::Value {
     serde_json::json!({
-        "model": cfg.modelo,
+        "model": modelo,
         "stream": true,
         "input": [{
             "type": "user_input",
@@ -103,47 +162,100 @@ pub fn audio_do_evento(linha: &str) -> Result<Option<Vec<i16>>, String> {
 }
 
 /// Pede a fala e entrega cada pedaço de áudio a `ao_receber` conforme chega.
+/// Se um modelo/chave der erro de cota (429) ou temporário antes de enviar áudio,
+/// tenta automaticamente o próximo da cascata.
 pub fn sintetizar_em_stream(
     cfg: &Config,
     texto: &str,
     timeout_seg: u64,
     mut ao_receber: impl FnMut(Vec<i16>),
 ) -> Result<(), String> {
-    let chave = chave()?;
-    // O prazo cobre o stream inteiro; texto longo demora mais para chegar todo.
-    let palavras = texto.split_whitespace().count() as u64;
-    let agente: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(timeout_seg + palavras)))
-        .http_status_as_error(false)
-        .build()
-        .into();
-    let mut resposta = agente
-        .post(ENDPOINT)
-        .header("x-goog-api-key", &chave)
-        .header("Content-Type", "application/json")
-        .send(corpo_pedido(cfg, texto).to_string())
-        .map_err(|e| e.to_string())?;
-    let status = resposta.status();
-    if !status.is_success() {
-        // O corpo traz o motivo (cota, chave, modelo); a chave nunca aparece nele.
-        let corpo = resposta.body_mut().read_to_string().unwrap_or_default();
-        let motivo: String = corpo.chars().take(300).collect();
-        return Err(format!("HTTP {}: {motivo}", status.as_u16()));
+    let chaves = chaves();
+    if chaves.is_empty() {
+        return Err(format!("sem chave no Keychain ({SERVICO_CHAVE})"));
     }
 
-    let mut recebeu = false;
-    for linha in BufReader::new(resposta.body_mut().as_reader()).lines() {
-        let linha = linha.map_err(|e| e.to_string())?;
-        if let Some(amostras) = audio_do_evento(&linha)? {
-            recebeu = true;
-            ao_receber(amostras);
+    let palavras = texto.split_whitespace().count() as u64;
+    let timeout = Duration::from_secs(timeout_seg + palavras);
+    let mut ultimo_erro = String::new();
+
+    for modelo in &cfg.modelos {
+        for chave in &chaves {
+            let agente: ureq::Agent = ureq::Agent::config_builder()
+                .timeout_global(Some(timeout))
+                .http_status_as_error(false)
+                .build()
+                .into();
+
+            let req_corpo = corpo_pedido(modelo, cfg, texto).to_string();
+            let mut resposta = match agente
+                .post(ENDPOINT)
+                .header("x-goog-api-key", chave)
+                .header("Content-Type", "application/json")
+                .send(req_corpo)
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    ultimo_erro = format!("conexão com {modelo} falhou: {e}");
+                    continue;
+                }
+            };
+
+            let status = resposta.status();
+            if !status.is_success() {
+                let corpo = resposta.body_mut().read_to_string().unwrap_or_default();
+                let motivo: String = corpo.chars().take(300).collect();
+                ultimo_erro = format!("HTTP {} em {modelo}: {motivo}", status.as_u16());
+                eprintln!(
+                    "[voz] {modelo} indisponível (HTTP {}); tentando próximo da cascata.",
+                    status.as_u16()
+                );
+                continue;
+            }
+
+            let mut recebeu = false;
+            let mut erro_stream = None;
+            for linha in BufReader::new(resposta.body_mut().as_reader()).lines() {
+                match linha {
+                    Ok(l) => match audio_do_evento(&l) {
+                        Ok(Some(amostras)) => {
+                            recebeu = true;
+                            ao_receber(amostras);
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            erro_stream = Some(e);
+                            break;
+                        }
+                    },
+                    Err(e) => {
+                        erro_stream = Some(e.to_string());
+                        break;
+                    }
+                }
+            }
+
+            if let Some(e) = erro_stream {
+                if recebeu {
+                    return Err(format!("stream de {modelo} interrompido: {e}"));
+                }
+                ultimo_erro = format!("erro no stream de {modelo}: {e}");
+                continue;
+            }
+
+            if recebeu {
+                return Ok(());
+            } else {
+                ultimo_erro = format!("stream de {modelo} sem áudio");
+            }
         }
     }
-    if recebeu {
-        Ok(())
+
+    Err(if ultimo_erro.is_empty() {
+        "nenhum modelo disponível".to_string()
     } else {
-        Err("stream sem áudio".to_string())
-    }
+        ultimo_erro
+    })
 }
 
 #[cfg(test)]
@@ -155,16 +267,30 @@ mod tests {
         let bloco = serde_json::json!({"voz": "Kore", "estilo": ""});
         let cfg = Config::de_json(Some(&bloco));
         assert_eq!(cfg.voz, "Kore");
-        assert_eq!(cfg.modelo, "gemini-3.8-flash-tts");
+        assert_eq!(
+            cfg.modelos,
+            vec!["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"]
+        );
         assert_eq!(cfg.modelo_resumo, "gemini-3.5-flash-lite");
         assert!(cfg.estilo.contains("Português do Brasil"));
         assert_eq!(Config::de_json(None).voz, "Vindemiatrix");
     }
 
     #[test]
+    fn test_config_aceita_modelo_ou_modelos() {
+        let bloco_unico = serde_json::json!({"modelo": "gemini-custom-tts"});
+        let cfg_unico = Config::de_json(Some(&bloco_unico));
+        assert_eq!(cfg_unico.modelos, vec!["gemini-custom-tts"]);
+
+        let bloco_multi = serde_json::json!({"modelos": ["mod1", "mod2"]});
+        let cfg_multi = Config::de_json(Some(&bloco_multi));
+        assert_eq!(cfg_multi.modelos, vec!["mod1", "mod2"]);
+    }
+
+    #[test]
     fn test_corpo_pedido_pede_stream_com_voz_estilo_e_texto() {
         let cfg = Config::de_json(None);
-        let corpo = corpo_pedido(&cfg, "Fiz o commit.");
+        let corpo = corpo_pedido(cfg.modelo_principal(), &cfg, "Fiz o commit.");
         assert_eq!(corpo["model"], "gemini-3.8-flash-tts");
         assert_eq!(corpo["stream"], true);
         assert_eq!(corpo["input"][0]["content"][0]["text"], "Fiz o commit.");
