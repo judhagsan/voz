@@ -3,7 +3,7 @@ name = "voz"
 version = "0.2.0"
 edition = "2021"
 authors = ["Judhá Santos <judhagsan@gmail.com>"]
-description = "Orquestrador de voz e despachante nativo para terminal e hooks de IA"
+description = "Avisos falados, narração e painel de repositórios para o terminal"
 
 [dependencies]
 base64 = "0.22"
