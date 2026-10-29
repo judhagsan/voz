@@ -66,6 +66,19 @@ if command -v gh >/dev/null 2>&1; then
   fi
 fi
 
+# Versões antigas usavam um motor de voz local em Python e um banco de áudios.
+# O que sobrou delas sai aqui: o processo do motor, o ambiente Python e o gancho
+# de pre-commit que chamava o comum.py (sem ele, todo commit falharia).
+pkill -f "$DESTINO/motor_local.py" 2>/dev/null || true
+if [ -d "$DESTINO/.venv" ]; then
+  echo "==> Removendo o ambiente Python da versão antiga..."
+  rm -rf "$DESTINO/.venv"
+fi
+if grep -qs 'comum.py' "$DESTINO/.git/hooks/pre-commit"; then
+  echo "==> Removendo o gancho de pre-commit da versão antiga..."
+  rm -f "$DESTINO/.git/hooks/pre-commit"
+fi
+
 chmod +x "$DESTINO/voz.sh" "$DESTINO/instalar.sh"
 
 echo "==> Compilando o binário voz (painel, hooks e voz)..."
