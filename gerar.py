@@ -1,11 +1,11 @@
 """Gera frases novas para o sorteio dos avisos de voz do Claude Code.
 
 Lê o que o usuário escreveu na sessão, pede ao Claude frases curtas no mesmo
-jeito de falar e sintetiza cada uma com a voz configurada no ElevenLabs.
+jeito de falar e sintetiza cada uma com o motor local (timbre da Laura).
 
 Uso:
   gerar.py automatico           chamado pelo voz.sh, com o JSON do hook na entrada
-  gerar.py configurar           acha a voz, o modelo e o orçamento no ElevenLabs
+  gerar.py configurar           mostra o status do motor de voz local e condicionais
   gerar.py simular <transcript> mostra as frases propostas, sem sintetizar
   gerar.py sincronizar          faz commit e push imediato da base se houver mudanças
 """
@@ -21,9 +21,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from comum import (  # noqa: E402
-    BLOQUEIO, ESTADO, LOG, SONS, TAGS, BASE, api_bloqueada, buscar_audio_existente, carregar_config,
-    carregar_estilo, chamar_claude, chave_api, log, mensagens_do_usuario, normalizar, requisicao,
-    salvar_config, salvar_estilo, sem_tags, sincronizar_catalogo, sincronizar_git, sintetizar,
+    ESTADO, LOG, SONS, TAGS, BASE, buscar_audio_existente, carregar_config,
+    carregar_estilo, chamar_claude, contem_termo_sensivel, log, mensagens_do_usuario,
+    normalizar, salvar_config, salvar_estilo, sem_tags, sincronizar_catalogo,
+    sincronizar_git, sintetizar,
 )
 
 HISTORICO = BASE / "historico.tsv"
@@ -46,7 +47,9 @@ def frases_existentes():
     if HISTORICO.exists():
         for linha in HISTORICO.read_text(encoding="utf-8").splitlines():
             partes = linha.split("\t")
-            if len(partes) >= 3 and partes[1] in existentes:
+            if len(partes) == 3 and partes[0] in existentes:
+                existentes[partes[0]].add(partes[1])
+            elif len(partes) >= 4 and partes[1] in existentes:
                 existentes[partes[1]].add(partes[2])
     return existentes
 
@@ -96,12 +99,12 @@ PROIBIDAS = {
 
 def tem_palavra_proibida(texto):
     palavras = set(normalizar(texto).split())
-    return bool(palavras & PROIBIDAS)
+    return bool(palavras & PROIBIDAS) or contem_termo_sensivel(texto)
 
 
 def atualizar_estilo(estilo, propostas):
     tom = sem_tags(str(propostas.get("tom", ""))).strip()
-    if tom:
+    if tom and not contem_termo_sensivel(tom):
         estilo["tom"] = tom[:200]
     atuais = [e for e in estilo.get("expressoes", []) if not tem_palavra_proibida(e)]
     vistas = {normalizar(e) for e in atuais}
@@ -110,8 +113,8 @@ def atualizar_estilo(estilo, propostas):
         if 1 < len(exp) <= 40 and not tem_palavra_proibida(exp) and normalizar(exp) not in vistas:
             atuais.append(exp)
             vistas.add(normalizar(exp))
+    estilo.pop("atualizado_em", None)
     estilo["expressoes"] = atuais[-100:]
-    estilo["atualizado_em"] = time.strftime("%Y-%m-%d %H:%M:%S")
     salvar_estilo(estilo)
 
 
@@ -151,7 +154,7 @@ def salvar_frase(cfg, chave, categoria, frase):
         n += 1
     destino.write_bytes(audio)
     with HISTORICO.open("a", encoding="utf-8") as h:
-        h.write("%s\t%s\t%s\t%s\n" % (time.strftime("%Y-%m-%d"), categoria, frase, destino.name))
+        h.write("%s\t%s\t%s\n" % (categoria, frase, destino.name))
     sincronizar_catalogo()
     log("nova (%s): %s" % (categoria, frase))
 
@@ -172,10 +175,7 @@ def automatico():
         return
     transcript = entrada.get("transcript_path") or entrada.get("transcriptPath")
     cfg = carregar_config()
-    if not transcript or not os.path.exists(transcript) or not cfg.get("voice_id"):
-        return
-    if api_bloqueada():
-        sincronizar_git(cfg)
+    if not transcript or not os.path.exists(transcript):
         return
 
     marca = ESTADO / "ultima-geracao"
@@ -190,9 +190,6 @@ def automatico():
     if len(mensagens) < cfg["min_mensagens"]:
         sincronizar_git(cfg)
         return
-    chave = chave_api(cfg)
-    if not chave:
-        return
 
     trava = ESTADO / "gerando.lock"
     try:
@@ -206,7 +203,7 @@ def automatico():
         marca.touch()
         aprovadas = pedir_frases(cfg, mensagens, frases_existentes(), categorias)
         for categoria, frase in aprovadas.items():
-            salvar_frase(cfg, chave, categoria, frase)
+            salvar_frase(cfg, None, categoria, frase)
         sincronizar_git(cfg, forcar=True)
     except Exception as erro:  # noqa: BLE001 - roda em segundo plano, só registra
         log("erro: %s" % erro)
@@ -219,48 +216,12 @@ def automatico():
 
 def configurar():
     cfg = carregar_config()
-    chave = chave_api(cfg)
-    if not chave:
-        sys.exit("Chave não encontrada no Keychain (serviço %s)." % cfg["keychain_service"])
-
-    busca = urllib.parse.quote(cfg["voice_name"])
-    vozes = json.loads(requisicao(chave, "/v2/voices?search=" + busca)).get("voices", [])
-    origem = "suas vozes"
-    if not vozes:
-        vozes = json.loads(requisicao(chave, "/v1/shared-voices?search=" + busca)).get("voices", [])
-        origem = "biblioteca de vozes"
-    if not vozes:
-        sys.exit("Nenhuma voz chamada %s encontrada." % cfg["voice_name"])
-    for v in vozes:
-        print("voz:    %s  %s  (%s)" % (v.get("voice_id"), v.get("name"), origem))
-    cfg["voice_id"] = vozes[0]["voice_id"]
-
-    modelos = json.loads(requisicao(chave, "/v1/models"))
-    tts = [m["model_id"] for m in modelos if m.get("can_do_text_to_speech")]
-    print("modelos:", ", ".join(tts))
-    # O v4 "cheio" é o mais expressivo; o Turbo troca expressividade por latência.
-    v4 = [m for m in tts if "v4" in m and "turbo" not in m and "flash" not in m]
-    if v4:
-        cfg["model_id"] = v4[0]
-    else:
-        print("Nenhum modelo v4 na lista; mantido", cfg["model_id"])
-
-    try:
-        assinatura = json.loads(requisicao(chave, "/v1/user/subscription"))
-        limite = int(assinatura["character_limit"])
-        # 70% do limite mensal dividido por 30 dias fica para a narração.
-        cfg["narrar"]["max_caracteres_dia"] = max(200, int(limite * 0.7 / 30))
-        print("plano:  %s, %d créditos/mês, %d usados" % (
-            assinatura.get("tier"), limite, assinatura.get("character_count", 0)))
-    except Exception as erro:  # noqa: BLE001 - a chave pode não ter permissão de leitura
-        print("Sem acesso à assinatura (%s); orçamento diário mantido." % erro)
-
-    salvar_config(cfg)
-    # Configurar de novo (outra voz, outro plano) libera uma pausa por recusa.
-    if BLOQUEIO.exists():
-        BLOQUEIO.unlink()
-    print("salvo: voz %s, modelo %s, %d caracteres/dia para narração" % (
-        cfg["voice_id"], cfg["model_id"], cfg["narrar"]["max_caracteres_dia"]))
+    from motor_local import CKPT_DIR, CONDS_FILE, daemon_esta_rodando
+    print("motor:  %s (voz %s)" % (cfg.get("motor", "local"), cfg.get("voz", "Laura")))
+    print("tom:    %.2f, velocidade: %.2f" % (cfg.get("tom_voz", 0.90), cfg.get("velocidade_voz", 0.91)))
+    print("pesos:  %s" % ("presentes" if CKPT_DIR.is_dir() else "não encontrados"))
+    print("conds:  %s" % ("prontas" if CONDS_FILE.is_file() else "não geradas"))
+    print("daemon: %s" % ("rodando" if daemon_esta_rodando() else "parado"))
 
 
 def simular(transcript):

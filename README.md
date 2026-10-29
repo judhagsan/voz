@@ -1,6 +1,8 @@
 # Voz
 
-Sistema de avisos falados, narração contextual por projeto, painel visual de repositórios no terminal e aprendizado contínuo de vocabulário no macOS, usando síntese neural da **ElevenLabs** e ajuste de timbre via **ffmpeg**.
+Sistema de avisos falados, narração contextual por projeto, painel visual de repositórios no terminal e aprendizado contínuo de vocabulário no macOS, usando o motor de voz neural local **Chatterbox** com clonagem do timbre da **Laura** e ajuste de tom/cadência via **ffmpeg**.
+
+100% local, offline, sem envio de dados para serviços externos e sem custos de API ou limites de créditos.
 
 ---
 
@@ -17,9 +19,10 @@ Sistema de avisos falados, narração contextual por projeto, painel visual de r
    - Ao concluir uma tarefa, identifica o repositório/projeto e resume em voz alta o que foi feito, proposto ou explicado.
    - Possui **fila global com trava (`flock`)**: quando vários agentes rodam em paralelo em projetos diferentes, as vozes nunca se atropelam — ou tocam em fila ordenada, ou juntam os resultados em uma única fala identificando cada repositório.
 
-3. **Catálogo verificado e economia de créditos (`catalogo.json`):**
+3. **Catálogo verificado e síntese local rápida (`catalogo.json` + `motor_local.py`):**
    - Cruza todos os arquivos `.mp3` existentes em `sons/` e `narracoes/` com seus textos e palavras-chave.
-   - Antes de sintetizar qualquer áudio novo na ElevenLabs, verifica se já existe uma gravação compatível no catálogo para reutilizá-la sem gastar créditos.
+   - Antes de sintetizar qualquer áudio novo, verifica se já existe uma gravação compatível no catálogo para reutilizá-la de imediato.
+   - Quando precisa sintetizar, o motor residente local (`motor_local.py`) mantém os pesos e as condicionais pré-calculadas da Laura em memória, gerando o áudio em poucos segundos via CPU multicore.
 
 4. **Avisos rápidos e aprendizado de estilo (`voz.sh` + `gerar.py` + `estilo.json`):**
    - Avisos para `terminei`, `permissao` (apenas quando um comando realmente aguarda aprovação manual) e `espera`.
@@ -31,16 +34,17 @@ Sistema de avisos falados, narração contextual por projeto, painel visual de r
 
 O instalador verifica e atualiza automaticamente para as versões mais recentes via Homebrew:
 
-- **macOS** (usa `afplay` e `security` nativos do sistema)
-- **ffmpeg** (prioritário/obrigatório para manter o tom `0.90` e a cadência `0.91` da voz sempre idênticos)
+- **macOS** (usa `afplay` nativo do sistema)
+- **ffmpeg** (ajuste de tom `0.90` e cadência `0.91` da voz)
 - **tmux** (multiplexador de terminal configurado com tema Dracula, cópia automática por seleção de mouse e etiqueta `✦ pasta` no canto direito de cada painel)
 - **GitHub CLI (`gh`)** (para consultar Pull Requests abertos e sincronizar seu fork)
+- **uv** e **espeak-ng** (gerenciamento do ambiente Python 3.11 e fonemizador para o Chatterbox)
 
 ---
 
 ## 1. Instalação via Terminal
 
-Para instalar direto no terminal (instala/atualiza `ffmpeg`, `tmux` e `gh` para a última versão, clona em `~/.claude/voz`, vincula o `~/.tmux.conf`, cria o comando `voz` em `~/.local/bin/voz` e configura os hooks):
+Para instalar direto no terminal:
 
 ```zsh
 curl -fsSL https://raw.githubusercontent.com/judhagsan/voz/main/instalar.sh | bash
@@ -60,26 +64,7 @@ source ~/.zshrc
 
 ---
 
-## 2. Como conectar a API da ElevenLabs
-
-A chave da API nunca fica salva em arquivos do repositório — ela é guardada com segurança no **Keychain do macOS**.
-
-1. Crie uma chave de API na sua conta da ElevenLabs (com permissão de *Text to Speech*).
-2. Salve a chave no Keychain rodando no terminal (substitua `SUA_CHAVE_AQUI` pela sua chave):
-
-```zsh
-security add-generic-password -U -a "$USER" -s "elevenlabs-api-key" -w "SUA_CHAVE_AQUI"
-```
-
-Para testar se a chave foi reconhecida:
-
-```zsh
-security find-generic-password -s "elevenlabs-api-key" -w
-```
-
----
-
-## 3. Como conectar o GitHub
+## 2. Como conectar o GitHub
 
 ### Caso 1: Instalando na sua própria máquina (dono do repositório)
 
@@ -123,7 +108,7 @@ O script detecta automaticamente a branch ativa (`HEAD`) e envia todas as atuali
 
 ---
 
-## 4. Como usar no terminal
+## 3. Como usar no terminal
 
 Mostrar o painel com todos os repositórios (destacando os que estão em andamento no topo):
 
@@ -155,14 +140,15 @@ voz -w 10
 
 | Arquivo / Pasta | Função |
 | :--- | :--- |
+| `motor_local.py` | Motor de síntese neural local Chatterbox com timbre clonado da Laura, fila assíncrona IPC e trava `flock`. |
 | `painel.py` | Painel visual de repositórios no terminal (executado pelo comando `voz`). |
 | `voz.sh` | Entrada dos hooks de eventos (`terminei`, `permissao`, `espera` e `pos-tool`). |
-| `comum.py` | Cliente ElevenLabs, ajuste de tom/velocidade via `ffmpeg`, trava `flock`, catálogo verificado (`catalogo.json`) e sincronização Git. |
+| `comum.py` | Ajuste de tom/velocidade via `ffmpeg`, fila `flock`, catálogo verificado (`catalogo.json`) e sincronização Git. |
 | `narrar.py` | Narração contextual com fila de múltiplos agentes e reaproveitamento de áudios existentes. |
 | `gerar.py` | Geração periódica de novas frases curtas e evolução do perfil em `estilo.json`. |
-| `instalar.sh` | Instalador automático para macOS via terminal (garante versões mais recentes de `ffmpeg`, `tmux` e `gh`). |
+| `instalar.sh` | Instalador automático para macOS via terminal (gerencia `ffmpeg`, `tmux`, `gh`, `uv`, `espeak-ng` e `.venv`). |
 | `tmux.conf` | Configuração versionada do `tmux` (vinculada em `~/.tmux.conf`). |
-| `config.json` | Configurações da voz (`Laura`, `tom_voz: 0.90`, `velocidade_voz: 0.91`), modelo (`eleven_v4`) e limites. |
+| `config.json` | Configurações da voz (`Laura`, `tom_voz: 0.90`, `velocidade_voz: 0.91`, motor local). |
 | `catalogo.json` | Relação verificada entre cada arquivo `.mp3` existente no disco, seu texto e suas palavras-chave. |
 | `sons/` | Áudios curtos divididos em `terminei/`, `permissao/` e `espera/`. |
 | `narracoes/` | Áudios de narração contextual organizados por repositório/projeto. |

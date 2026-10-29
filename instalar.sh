@@ -17,10 +17,10 @@ if ! command -v brew >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "==> Verificando e atualizando dependências para as versões mais recentes (ffmpeg, tmux, gh)..."
+echo "==> Verificando e atualizando dependências para as versões mais recentes (ffmpeg, tmux, gh, uv, espeak-ng)..."
 brew update --quiet || true
 
-for pacote in ffmpeg tmux gh; do
+for pacote in ffmpeg tmux gh uv espeak-ng; do
   if ! brew list --formula "$pacote" >/dev/null 2>&1; then
     echo "==> Instalando $pacote (versão mais recente)..."
     brew install "$pacote"
@@ -53,8 +53,16 @@ if command -v gh >/dev/null 2>&1; then
   fi
 fi
 
-chmod +x "$DESTINO/voz.sh" "$DESTINO/painel.py" "$DESTINO/instalar.sh"
+chmod +x "$DESTINO/voz.sh" "$DESTINO/painel.py" "$DESTINO/motor_local.py" "$DESTINO/instalar.sh"
 ln -sf "$DESTINO/painel.py" "$BIN_DIR/voz"
+
+if [ ! -d "$DESTINO/.venv" ]; then
+  echo "==> Criando ambiente virtual Python 3.11 para o motor de voz local..."
+  uv venv "$DESTINO/.venv" --python 3.11
+fi
+
+echo "==> Verificando dependências do motor de voz local (chatterbox-tts, soundfile)..."
+"$DESTINO/.venv/bin/pip" install --quiet --upgrade chatterbox-tts soundfile torch
 
 if [ -f "$DESTINO/tmux.conf" ]; then
   ln -sf "$DESTINO/tmux.conf" "$HOME/.tmux.conf"
@@ -148,12 +156,15 @@ PY
 
 /usr/bin/python3 -I "$DESTINO/comum.py" catalogo
 
-if ! security find-generic-password -s "elevenlabs-api-key" >/dev/null 2>&1; then
-  echo ""
-  echo "==> Chave da ElevenLabs ainda não cadastrada no Keychain."
-  echo "    Para cadastrar, rode no terminal:"
-  echo "    security add-generic-password -U -a \"\$USER\" -s \"elevenlabs-api-key\" -w \"SUA_CHAVE_AQUI\""
-fi
+mkdir -p "$DESTINO/.git/hooks"
+cat > "$DESTINO/.git/hooks/pre-commit" <<'HOOK'
+#!/usr/bin/env bash
+set -euo pipefail
+REPO_DIR="$(git rev-parse --show-toplevel)"
+/usr/bin/python3 -I "$REPO_DIR/comum.py" catalogo >/dev/null
+git -C "$REPO_DIR" add -- sons narracoes estilo.json catalogo.json historico.tsv narracoes.tsv 2>/dev/null || true
+HOOK
+chmod +x "$DESTINO/.git/hooks/pre-commit"
 
 echo ""
 echo "==> Instalação concluída! Abra um novo terminal (ou rode 'source ~/.zshrc') e digite:"

@@ -1,4 +1,5 @@
 estado/
+.venv/
 gerar.log
 __pycache__/
 .DS_Store

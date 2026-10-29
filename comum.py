@@ -1,6 +1,7 @@
 """Peças compartilhadas pelo gerador de frases e pela narração."""
 
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -23,7 +24,6 @@ CATALOGO = BASE / "catalogo.json"
 HISTORICO = BASE / "historico.tsv"
 INDICE_NARRACOES = BASE / "narracoes.tsv"
 LOG = BASE / "gerar.log"
-API = "https://api.elevenlabs.io"
 
 STOPWORDS = {
     "a", "o", "as", "os", "de", "do", "da", "dos", "das", "em", "no", "na",
@@ -34,7 +34,6 @@ STOPWORDS = {
     "pela", "ao", "aos", "as",
 }
 
-# Tags de emoção que o ElevenLabs v3/v4 interpreta; são sugestões, não lista fechada.
 TAGS = "[laughs], [chuckles], [excited], [sighs], [whispers], [sarcastic], [curious]"
 
 
@@ -63,39 +62,6 @@ def salvar_estilo(estilo):
     ESTILO.write_text(json.dumps(estilo, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def chave_api(cfg):
-    r = subprocess.run(
-        ["security", "find-generic-password", "-s", cfg["keychain_service"], "-w"],
-        capture_output=True,
-        text=True,
-    )
-    return r.stdout.strip() if r.returncode == 0 else ""
-
-
-def requisicao(chave, caminho, corpo=None, timeout=60):
-    cabecalhos = {"xi-api-key": chave}
-    dados = None
-    if corpo is not None:
-        dados = json.dumps(corpo).encode("utf-8")
-        cabecalhos["Content-Type"] = "application/json"
-    req = urllib.request.Request(API + caminho, data=dados, headers=cabecalhos)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.read()
-    except urllib.error.HTTPError as erro:
-        # O corpo traz o motivo (plano, cota, voz); sem ele o log só diria o código.
-        motivo = erro.read().decode("utf-8", "replace")[:400]
-        raise RuntimeError("ElevenLabs %d: %s" % (erro.code, motivo)) from None
-
-
-BLOQUEIO = ESTADO / "api-bloqueada"
-
-
-def api_bloqueada():
-    # Recusa por plano ou cota não passa sozinha; tenta de novo só depois de um dia.
-    return BLOQUEIO.exists() and time.time() - BLOQUEIO.stat().st_mtime < 86400
-
-
 def ajustar_tom(audio, fator, velocidade=1.0):
     """Altera o tom (pitch) e a velocidade do MP3 via ffmpeg."""
     if (not fator or abs(fator - 1.0) < 0.01) and (not velocidade or abs(velocidade - 1.0) < 0.01):
@@ -113,32 +79,15 @@ def ajustar_tom(audio, fator, velocidade=1.0):
     return r.stdout if r.returncode == 0 and r.stdout else audio
 
 
-def sintetizar(cfg, chave, texto):
+def sintetizar(cfg, chave=None, texto=None):
+    """Sintetiza áudio usando o motor local Chatterbox com o timbre da Laura."""
+    if texto is None:
+        texto = chave
+    from motor_local import sintetizar as sintetizar_local
     texto_limpo = sem_tags(texto)
-    try:
-        audio = requisicao(
-            chave,
-            "/v1/text-to-speech/%s?output_format=mp3_44100_128" % cfg["voice_id"],
-            {
-                "text": texto_limpo,
-                "model_id": cfg["model_id"],
-                "language_code": "pt",
-                "voice_settings": {
-                    "stability": 0.30,
-                    "similarity_boost": 0.75,
-                    "style": 0.38,
-                },
-            },
-        )
-        return ajustar_tom(
-            audio,
-            float(cfg.get("tom_voz", 1.0)),
-            float(cfg.get("velocidade_voz", 1.0)),
-        )
-    except RuntimeError as erro:
-        if str(erro).startswith(("ElevenLabs 401", "ElevenLabs 402")):
-            BLOQUEIO.write_text(str(erro), encoding="utf-8")
-        raise
+    tom = float(cfg.get("tom_voz", 0.90))
+    vel = float(cfg.get("velocidade_voz", 0.91))
+    return sintetizar_local(texto_limpo, tom_voz=tom, velocidade_voz=vel)
 
 
 def chamar_claude(cfg, pedido, timeout=60):
@@ -170,27 +119,244 @@ def sem_tags(texto):
 
 
 def normalizar(frase):
-    # Compara frases ignorando caixa, pontuação, numeração e marcas como "(raiva)".
+    # Compara frases ignorando caixa, pontuação e marcas como "(raiva)", preservando números.
     frase = unicodedata.normalize("NFC", frase).lower()
     frase = re.sub(r"\(.*?\)|\[.*?\]", "", frase)
-    return " ".join(re.sub(r"[\d\W_]+", " ", frase).split())
+    return " ".join(re.sub(r"[\W_]+", " ", frase).split())
 
 
 def palavras_chave(texto):
-    """Extrai palavras significativas normalizadas (sem acento e sem stopwords)."""
+    """Extrai palavras e números significativos normalizados (sem acento e sem stopwords)."""
     sem_acento = "".join(
         c for c in unicodedata.normalize("NFD", normalizar(texto))
         if unicodedata.category(c) != "Mn"
     )
-    return [p for p in sem_acento.split() if len(p) > 1 and p not in STOPWORDS]
+    return [p for p in sem_acento.split() if (len(p) > 1 or p.isdigit()) and p not in STOPWORDS]
+
+
+def sem_acento_str(texto):
+    return "".join(
+        c for c in unicodedata.normalize("NFD", normalizar(texto))
+        if unicodedata.category(c) != "Mn"
+    )
+
+
+def id_hash_texto(texto):
+    return hashlib.sha1(normalizar(texto).encode("utf-8")).hexdigest()[:10]
+
+
+def classificar_intencao(texto):
+    """Classifica a intenção comunicativa e interpretativa da fala."""
+    t = sem_acento_str(texto)
+    if any(p in t for p in ("proposta", "plano", "aguardo", "aprovacao", "confirmar", "opcao", "prefere", "posso")):
+        return "proposta"
+    if any(p in t for p in ("erro", "falhou", "bloqueou", "bloqueado", "problema", "pendente")):
+        return "bloqueio"
+    if any(p in t for p in ("diagnostico", "causa", "explicacao", "analise", "motivo")):
+        return "diagnostico"
+    return "conclusao"
+
+
+def termos_sensiveis_locais():
+    """Descobre nomes de repositórios locais, usuários e marcas de sessão que não devem ir para o banco."""
+    proibidos = {
+        "aracuan", "pindorama", "menuspoiler", "spoiler", "superpistaweb", "superpista",
+        "grao", "barsan", "jlmoldes", "judhagsan", "antigravity", "claude", "elevenlabs",
+        "callum", "mayla", "laura", "keychain", "zshrc",
+    }
+    user = os.environ.get("USER", "").strip().lower()
+    if len(user) > 2:
+        proibidos.add(user)
+    home = Path.home()
+    try:
+        for item in home.iterdir():
+            if item.name.startswith(".") or not item.is_dir():
+                continue
+            if (item / ".git").exists():
+                nome = sem_acento_str(item.name)
+                if len(nome) > 2 and nome not in {"voz", "menu"}:
+                    proibidos.add(nome)
+    except OSError:
+        pass
+    return proibidos
+
+
+def contem_termo_sensivel(texto):
+    """Retorna True se o texto mencionar repositórios locais, branches ou dados de sessão privada."""
+    tokens = set(sem_acento_str(texto).split())
+    if tokens & termos_sensiveis_locais():
+        return True
+    t = sem_acento_str(texto)
+    padroes_sessao = (
+        r"\bprojeto\s+d[aeo]\s+voz\b",
+        r"\baqui\s+no\s+voz\b",
+        r"\bno\s+voz\b",
+        r"\bpr\s+\d+\b",
+        r"\b(?:feat|fix|chore)/",
+    )
+    return any(re.search(p, t) for p in padroes_sessao)
+
+
+def _caminho_ffmpeg():
+    ff = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+    return ff if os.path.exists(ff) else ""
+
+
+def duracao_mp3(mp3_path):
+    """Mede a duração exata em segundos de um arquivo .mp3 via ffmpeg."""
+    ffmpeg = _caminho_ffmpeg()
+    if not ffmpeg or not mp3_path or not Path(mp3_path).is_file():
+        return 0.0
+    try:
+        r = subprocess.run(
+            [ffmpeg, "-i", str(mp3_path)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", r.stderr)
+        if m:
+            h, mi, s = int(m.group(1)), int(m.group(2)), float(m.group(3))
+            return round(h * 3600 + mi * 60 + s, 2)
+    except Exception:
+        pass
+    return 0.0
+
+
+def perfil_diccao_interpretacao(texto, intencao, mp3_path=None):
+    """Calcula metadados completos de dicção, prosódia e interpretação sem expor sessão."""
+    cfg = carregar_config()
+    vs = cfg.get("voice_settings") or {}
+    txt = texto.strip()
+    if txt.endswith("?"):
+        entoacao = "interrogativa"
+    elif txt.endswith("!"):
+        entoacao = "exclamativa"
+    else:
+        entoacao = "declarativa"
+
+    pausas_internas = sum(txt.count(p) for p in (",", ":", ";", "—"))
+    frases = [f for f in re.split(r"(?<=[.!?])\s+", txt) if f.strip()]
+    cadencia = "pausada" if (pausas_internas > 0 or len(frases) > 1) else "direta"
+
+    mapa_energia = {
+        "terminei": "alta",
+        "conclusao": "firme",
+        "proposta": "consultiva",
+        "permissao": "consultiva",
+        "diagnostico": "analitica",
+        "bloqueio": "alerta",
+        "espera": "calma",
+    }
+    energia = mapa_energia.get(intencao, "firme")
+    vogais = re.findall(r"[aeiouáéíóúâêôãõ]+", txt.lower())
+
+    return {
+        "interpretacao": {
+            "intencao": intencao,
+            "entoacao": entoacao,
+            "cadencia": cadencia,
+            "energia": energia,
+            "parametros_voz": {
+                "tom": float(cfg.get("tom_voz", 0.90)),
+                "velocidade": float(cfg.get("velocidade_voz", 0.91)),
+                "stability": float(vs.get("stability", 0.30)),
+                "similarity_boost": float(vs.get("similarity_boost", 0.75)),
+                "style": float(vs.get("style", 0.38)),
+            },
+        },
+        "diccao": {
+            "silabas_estimadas": max(1, len(vogais)),
+            "pausas_internas": pausas_internas,
+            "sentencas": len(frases),
+            "duracao_s": duracao_mp3(mp3_path) if mp3_path else 0.0,
+        },
+    }
+
+
+def sanitizar_banco():
+    """Limpa metadados de sessão e datas antes de atualizar o banco versionado (apenas áudios inteiros)."""
+    NARRACOES.mkdir(parents=True, exist_ok=True)
+    registros_limpos = {}
+
+    if INDICE_NARRACOES.exists():
+        for linha in INDICE_NARRACOES.read_text(encoding="utf-8").splitlines():
+            partes = linha.split("\t")
+            if len(partes) == 3:
+                nome_arq, intencao, fala = partes[0], partes[1], partes[2]
+                candidatos = [NARRACOES / nome_arq]
+            elif len(partes) >= 4:
+                proj, nome_arq, fala = partes[1], partes[2], partes[3]
+                pasta_proj = re.sub(r"[^\w.-]+", "-", proj).strip("-")
+                candidatos = [NARRACOES / pasta_proj / nome_arq, NARRACOES / nome_arq]
+                intencao = classificar_intencao(fala)
+            else:
+                continue
+
+            mp3_origem = next((c for c in candidatos if c.is_file() and c.stat().st_size > 0), None)
+            if contem_termo_sensivel(fala):
+                if mp3_origem and mp3_origem.exists():
+                    mp3_origem.unlink(missing_ok=True)
+                continue
+            if not mp3_origem:
+                continue
+
+            novo_nome = id_hash_texto(fala) + ".mp3"
+            destino = NARRACOES / novo_nome
+            if mp3_origem.resolve() != destino.resolve():
+                shutil.move(str(mp3_origem), str(destino))
+            registros_limpos[novo_nome] = (intencao, fala)
+
+    for sub in list(NARRACOES.iterdir()):
+        if sub.is_dir():
+            shutil.rmtree(sub, ignore_errors=True)
+        elif sub.is_file() and sub.name not in registros_limpos:
+            sub.unlink(missing_ok=True)
+
+    linhas_tsv = [
+        "%s\t%s\t%s" % (arq, info[0], info[1])
+        for arq, info in sorted(registros_limpos.items())
+    ]
+    INDICE_NARRACOES.write_text(
+        ("\n".join(linhas_tsv) + "\n") if linhas_tsv else "",
+        encoding="utf-8",
+    )
+
+    if HISTORICO.exists():
+        h_limpo = []
+        for linha in HISTORICO.read_text(encoding="utf-8").splitlines():
+            partes = linha.split("\t")
+            if len(partes) == 4:
+                _, cat, frase, arq = partes
+            elif len(partes) == 3:
+                cat, frase, arq = partes
+            else:
+                continue
+            if not contem_termo_sensivel(frase) and (SONS / cat / arq).is_file():
+                h_limpo.append("%s\t%s\t%s" % (cat, frase, arq))
+        HISTORICO.write_text(("\n".join(h_limpo) + "\n") if h_limpo else "", encoding="utf-8")
+
+    if ESTILO.exists():
+        estilo = carregar_estilo()
+        exp_limpas = [
+            e for e in estilo.get("expressoes", [])
+            if not contem_termo_sensivel(e)
+        ]
+        tom_limpo = estilo.get("tom", "")
+        if contem_termo_sensivel(tom_limpo):
+            tom_limpo = "Direto, técnico e objetivo, focado em qualidade de código e validação prática."
+        ESTILO.write_text(
+            json.dumps({"tom": tom_limpo, "expressoes": exp_limpas}, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
 
 def sincronizar_catalogo():
-    """Verifica todos os .mp3 reais em sons/ e narracoes/ contra os índices e grava catalogo.json."""
+    """Sanitiza o banco, verifica os .mp3 inteiros em sons/ e narracoes/ e grava catalogo.json com dicção e interpretação."""
+    sanitizar_banco()
     itens = []
     vistos = set()
 
-    # 1. Sons curtos por categoria (sons/<categoria>/*.mp3)
     if SONS.exists():
         for mp3 in sorted(SONS.glob("*/*.mp3")):
             if not mp3.is_file() or mp3.stat().st_size == 0:
@@ -198,51 +364,51 @@ def sincronizar_catalogo():
             rel = str(mp3.relative_to(BASE))
             cat = mp3.parent.name
             texto = unicodedata.normalize("NFC", mp3.stem)
+            perfil = perfil_diccao_interpretacao(texto, cat, mp3)
             itens.append({
+                "id": id_hash_texto(texto),
                 "arquivo": rel,
                 "tipo": "som",
                 "escopo": cat,
+                "intencao": cat,
                 "texto": texto,
                 "normalizado": normalizar(texto),
                 "palavras": palavras_chave(texto),
+                "interpretacao": perfil["interpretacao"],
+                "diccao": perfil["diccao"],
                 "bytes": mp3.stat().st_size,
             })
             vistos.add(rel)
 
-    # 2. Narrações contextuais verificadas (narracoes/<projeto>/*.mp3 <-> narracoes.tsv)
-    linhas_validas = []
     if INDICE_NARRACOES.exists():
         for linha in INDICE_NARRACOES.read_text(encoding="utf-8").splitlines():
             partes = linha.split("\t")
-            if len(partes) < 4:
+            if len(partes) < 3:
                 continue
-            data_hora, proj, nome_arq, fala = partes[0], partes[1], partes[2], partes[3]
-            pasta_proj = re.sub(r"[^\w.-]+", "-", proj).strip("-")
-            mp3 = NARRACOES / pasta_proj / nome_arq
+            nome_arq, intencao, fala = partes[0], partes[1], partes[2]
+            mp3 = NARRACOES / nome_arq
             if not mp3.is_file() or mp3.stat().st_size == 0:
                 continue
             rel = str(mp3.relative_to(BASE))
             if rel in vistos:
                 continue
             vistos.add(rel)
-            linhas_validas.append(linha)
+            perfil = perfil_diccao_interpretacao(fala, intencao, mp3)
             itens.append({
+                "id": nome_arq.removesuffix(".mp3"),
                 "arquivo": rel,
                 "tipo": "narracao",
-                "escopo": proj,
+                "escopo": intencao,
+                "intencao": intencao,
                 "texto": fala,
                 "normalizado": normalizar(fala),
                 "palavras": palavras_chave(fala),
+                "interpretacao": perfil["interpretacao"],
+                "diccao": perfil["diccao"],
                 "bytes": mp3.stat().st_size,
-                "criado_em": data_hora,
             })
-        # Limpa entradas órfãs de arquivos que já foram removidos do disco.
-        novo_tsv = ("\n".join(linhas_validas) + "\n") if linhas_validas else ""
-        if INDICE_NARRACOES.read_text(encoding="utf-8") != novo_tsv:
-            INDICE_NARRACOES.write_text(novo_tsv, encoding="utf-8")
 
     dados = {
-        "atualizado_em": time.strftime("%Y-%m-%d %H:%M:%S"),
         "total": len(itens),
         "itens": itens,
     }
@@ -255,6 +421,7 @@ def buscar_audio_existente(texto, escopo=None, tipo=None, limiar=0.72):
     itens = sincronizar_catalogo()
     norm = normalizar(texto)
     p_alvo = set(palavras_chave(texto))
+    nums_alvo = re.findall(r"\d+", texto)
     if not norm:
         return None, None, 0.0
 
@@ -265,6 +432,10 @@ def buscar_audio_existente(texto, escopo=None, tipo=None, limiar=0.72):
             continue
         caminho = BASE / item["arquivo"]
         if not caminho.is_file() or caminho.stat().st_size == 0:
+            continue
+        nums_item = re.findall(r"\d+", item.get("texto", ""))
+        # Em modo de reutilização direta, números divergentes impedem reaproveitar o áudio.
+        if limiar >= 0.65 and nums_alvo != nums_item:
             continue
         if item["normalizado"] == norm:
             if not escopo or item.get("escopo") == escopo:
@@ -374,6 +545,7 @@ def sincronizar_git(cfg, forcar=False):
     if not forcar and marca.exists() and time.time() - marca.stat().st_mtime < intervalo:
         return False
     marca.touch()
+    sincronizar_catalogo()
 
     alvos = [c for c in CAMINHOS_BANCO if (BASE / c).exists()]
     if not alvos:
