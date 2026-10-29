@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
-use std::thread;
-use std::time::Duration;
 
 pub fn comando_autorizado_agy(cmd: &str) -> bool {
     let home = match std::env::var("HOME") {
@@ -111,21 +109,10 @@ pub fn agy_precisa_permissao(entrada_json: &str) -> bool {
     let args = tc.get("args").and_then(|a| a.as_object());
 
     if nome == "ask_question" {
-        thread::sleep(Duration::from_millis(1000));
         return true;
     }
 
     if nome == "run_command" {
-        let bypass = args
-            .and_then(|a| a.get("BypassSandbox"))
-            .and_then(|b| b.as_bool())
-            .unwrap_or(false);
-
-        // Se roda em sandbox normal, é 100% automático e nunca requer permissão
-        if !bypass {
-            return false;
-        }
-
         let cmd = args
             .and_then(|a| a.get("CommandLine"))
             .and_then(|c| c.as_str())
@@ -140,4 +127,33 @@ pub fn agy_precisa_permissao(entrada_json: &str) -> bool {
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ask_question_precisa_permissao() {
+        let json = r#"{"toolCall":{"name":"ask_question","args":{}}}"#;
+        assert!(agy_precisa_permissao(json));
+    }
+
+    #[test]
+    fn test_comando_desconhecido_precisa_permissao() {
+        let json = r#"{"toolCall":{"name":"run_command","args":{"CommandLine":"comando_desconhecido_123"}}}"#;
+        assert!(agy_precisa_permissao(json));
+    }
+
+    #[test]
+    fn test_comando_vazio_precisa_permissao() {
+        let json = r#"{"toolCall":{"name":"run_command","args":{"CommandLine":""}}}"#;
+        assert!(agy_precisa_permissao(json));
+    }
+
+    #[test]
+    fn test_ferramenta_sem_permissao() {
+        let json = r#"{"toolCall":{"name":"read_file","args":{}}}"#;
+        assert!(!agy_precisa_permissao(json));
+    }
 }

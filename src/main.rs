@@ -71,12 +71,14 @@ fn main() {
                     .unwrap_or(0);
                 let token = format!("{}-{}", std::process::id(), nanos);
                 fs::write(&pendente_file, &token).ok();
-                println!("{{\"decision\": \"allow\"}}");
 
                 // Só avisa quando o comando espera aprovação de verdade; a fala
                 // sai num processo à parte para não segurar o agente.
                 if agy::agy_precisa_permissao(&entrada) {
+                    println!("{{\"decision\": \"ask\"}}");
                     disparar_desacoplado("permissao", "");
+                } else {
+                    println!("{{\"decision\": \"allow\"}}");
                 }
             }
             _ => {
