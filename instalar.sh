@@ -184,12 +184,31 @@ for k, v in dados2.items():
 cfg2.write_text(json.dumps(novo_dados2, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
 
-if ! security find-generic-password -s gemini-api-key >/dev/null 2>&1; then
-  echo ""
-  echo "==> Falta a chave da voz (Gemini). Crie em https://aistudio.google.com/apikey e salve:"
-  echo "    security add-generic-password -a \"\$USER\" -s gemini-api-key -w"
-  echo "    Sem a chave, os avisos saem pela voz do sistema (say)."
+echo ""
+echo "==> Configuração de Chaves de API (Keychain do macOS):"
+if security find-generic-password -s gemini-api-key >/dev/null 2>&1; then
+  echo "    [✓] Gemini: chave principal configurada."
+else
+  echo "    [ ] Gemini (gratuito): https://aistudio.google.com/apikey"
+  echo "        security add-generic-password -a \"$USER\" -s gemini-api-key -w \"SUA_CHAVE\""
+  echo "        Dica: adicione gemini-api-key-2 para multiplicar a cota diária!"
 fi
+
+if security find-generic-password -s elevenlabs-api-key >/dev/null 2>&1; then
+  echo "    [✓] ElevenLabs: chave configurada."
+else
+  echo "    [-] ElevenLabs (opcional): https://elevenlabs.io"
+  echo "        security add-generic-password -a \"$USER\" -s elevenlabs-api-key -w \"SUA_CHAVE\""
+fi
+
+if security find-generic-password -s openai-api-key >/dev/null 2>&1; then
+  echo "    [✓] OpenAI: chave configurada."
+else
+  echo "    [-] OpenAI (opcional): https://platform.openai.com/api-keys"
+  echo "        security add-generic-password -a \"$USER\" -s openai-api-key -w \"SUA_CHAVE\""
+fi
+
+echo "    [✓] Siri Natural (macOS 27 - Voz 2): pronta para uso offline sem chaves."
 
 echo ""
 echo "==> Instalação concluída! Abra um novo terminal (ou rode 'source ~/.zshrc') e teste:"

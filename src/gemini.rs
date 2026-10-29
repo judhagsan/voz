@@ -9,7 +9,6 @@
 
 use base64::Engine;
 use std::io::{BufRead, BufReader};
-use std::process::Command;
 use std::time::Duration;
 
 const ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/interactions";
@@ -57,6 +56,9 @@ impl Config {
                 vec![
                     "gemini-3.8-flash-tts".to_string(),
                     "gemini-3.8-flash-lite-tts".to_string(),
+                    "gemini-3.1-flash-tts-preview".to_string(),
+                    "gemini-2.5-flash-preview-tts".to_string(),
+                    "gemini-2.5-pro-preview-tts".to_string(),
                 ]
             });
 
@@ -81,54 +83,30 @@ impl Config {
 }
 
 pub(crate) fn chaves() -> Vec<String> {
-    let mut lista = Vec::new();
-    if let Ok(c) = ler_chave_keychain(SERVICO_CHAVE) {
-        lista.push(c);
-    }
-    let mut idx = 2;
-    loop {
-        let servico = format!("{SERVICO_CHAVE}-{idx}");
-        match ler_chave_keychain(&servico) {
-            Ok(c) => {
-                lista.push(c);
-                idx += 1;
-            }
-            Err(_) => break,
-        }
-    }
-    lista
-}
-
-fn ler_chave_keychain(servico: &str) -> Result<String, String> {
-    let saida = Command::new("security")
-        .args(["find-generic-password", "-s", servico, "-w"])
-        .output()
-        .map_err(|e| e.to_string())?;
-    let chave = String::from_utf8_lossy(&saida.stdout).trim().to_string();
-    if chave.is_empty() {
-        return Err(format!("sem chave no Keychain ({servico})"));
-    }
-    Ok(chave)
+    crate::keychain::chaves(SERVICO_CHAVE)
 }
 
 pub(crate) fn chave() -> Result<String, String> {
-    chaves()
-        .into_iter()
-        .next()
-        .ok_or_else(|| format!("sem chave no Keychain ({SERVICO_CHAVE})"))
+    crate::keychain::ler_chave(SERVICO_CHAVE)
 }
 
 pub fn corpo_pedido(modelo: &str, cfg: &Config, texto: &str) -> serde_json::Value {
+    let mut conteudo = serde_json::json!({
+        "type": "text",
+        "text": texto,
+    });
+    // O campo annotations com speech_metadata só é suportado na família 3.8+
+    if modelo.contains("3.8") {
+        conteudo["annotations"] = serde_json::json!([
+            {"type": "speech_metadata", "style": cfg.estilo}
+        ]);
+    }
     serde_json::json!({
         "model": modelo,
         "stream": true,
         "input": [{
             "type": "user_input",
-            "content": [{
-                "type": "text",
-                "text": texto,
-                "annotations": [{"type": "speech_metadata", "style": cfg.estilo}],
-            }],
+            "content": [conteudo],
         }],
         "response_format": {"type": "audio"},
         "generation_config": {"speech_config": [{"voice": cfg.voz}]},
@@ -269,7 +247,13 @@ mod tests {
         assert_eq!(cfg.voz, "Kore");
         assert_eq!(
             cfg.modelos,
-            vec!["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"]
+            vec![
+                "gemini-3.8-flash-tts",
+                "gemini-3.8-flash-lite-tts",
+                "gemini-3.1-flash-tts-preview",
+                "gemini-2.5-flash-preview-tts",
+                "gemini-2.5-pro-preview-tts"
+            ]
         );
         assert_eq!(cfg.modelo_resumo, "gemini-3.5-flash-lite");
         assert!(cfg.estilo.contains("Português do Brasil"));
@@ -302,6 +286,14 @@ mod tests {
             corpo["generation_config"]["speech_config"][0]["voice"],
             "Vindemiatrix"
         );
+    }
+
+    #[test]
+    fn test_corpo_pedido_modelos_sem_annotations() {
+        let cfg = Config::de_json(None);
+        let corpo = corpo_pedido("gemini-2.5-flash-preview-tts", &cfg, "Fiz o commit.");
+        assert_eq!(corpo["model"], "gemini-2.5-flash-preview-tts");
+        assert!(corpo["input"][0]["content"][0].get("annotations").is_none());
     }
 
     #[test]

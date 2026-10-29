@@ -9,7 +9,6 @@ use std::thread;
 
 use crate::audio;
 use crate::fonetica::{ajustar_fonetica, carregar_regras};
-use crate::gemini;
 
 /// Frases usadas quando o config.json não traz as do aviso.
 const FRASES_PADRAO: &[(&str, &str)] = &[
@@ -70,29 +69,79 @@ pub fn sortear_frase(base: &Path, categoria: &str) -> Option<String> {
 }
 
 pub fn falar(base: &Path, texto: &str, timeout_seg: u64) {
-    let cfg = gemini::Config::de_json(ler_config(base).get("gemini"));
-    let para_gemini = ajustar_fonetica(texto, &carregar_regras(base, false));
+    let cfg_json = ler_config(base);
+    let provedores: Vec<String> = cfg_json
+        .get("provedores")
+        .and_then(|p| p.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_else(|| {
+            vec![
+                "gemini".to_string(),
+                "elevenlabs".to_string(),
+                "openai".to_string(),
+            ]
+        });
 
-    // O tocador roda em paralelo e começa assim que o primeiro pedaço chega.
-    let (envia, recebe) = mpsc::channel();
-    let base_tocador = base.to_path_buf();
-    let tocador = thread::spawn(move || audio::tocar_stream(&base_tocador, recebe));
-    let resultado = gemini::sintetizar_em_stream(&cfg, &para_gemini, timeout_seg, |pedaco| {
-        let _ = envia.send(pedaco);
-    });
-    drop(envia);
-    let tocou = tocador.join().unwrap_or(false);
+    let para_voz = ajustar_fonetica(texto, &carregar_regras(base, false));
 
-    match resultado {
-        Ok(()) if tocou => return,
-        // Parou no meio: repetir a frase inteira no `say` soaria pior que o corte.
-        Err(e) if tocou => {
-            eprintln!("[voz] o stream do Gemini parou no meio ({e}).");
-            return;
+    for prov in &provedores {
+        let (envia, recebe) = mpsc::channel();
+        let base_tocador = base.to_path_buf();
+        let tocador = thread::spawn(move || audio::tocar_stream(&base_tocador, recebe));
+
+        let res = match prov.as_str() {
+            "gemini" => {
+                let cfg = crate::gemini::Config::de_json(cfg_json.get("gemini"));
+                crate::gemini::sintetizar_em_stream(&cfg, &para_voz, timeout_seg, |pedaco| {
+                    let _ = envia.send(pedaco);
+                })
+            }
+            "elevenlabs" => {
+                let cfg = crate::elevenlabs::Config::de_json(cfg_json.get("elevenlabs"));
+                crate::elevenlabs::sintetizar_em_stream(&cfg, &para_voz, timeout_seg, |pedaco| {
+                    let _ = envia.send(pedaco);
+                })
+            }
+            "openai" => {
+                let cfg = crate::openai::Config::de_json(cfg_json.get("openai"));
+                crate::openai::sintetizar_em_stream(&cfg, &para_voz, timeout_seg, |pedaco| {
+                    let _ = envia.send(pedaco);
+                })
+            }
+            outro => {
+                drop(envia);
+                let _ = tocador.join();
+                eprintln!("[voz] provedor desconhecido: {outro}");
+                continue;
+            }
+        };
+
+        drop(envia);
+        let tocou = tocador.join().unwrap_or(false);
+
+        match res {
+            Ok(()) if tocou => return,
+            // Parou no meio: repetir a frase inteira no say soaria pior que o corte.
+            Err(e) if tocou => {
+                eprintln!("[voz] o stream de {prov} parou no meio ({e}).");
+                return;
+            }
+            Err(e) => {
+                eprintln!("[voz] {prov} indisponível ({e}); tentando próximo provedor.");
+            }
+            Ok(()) => {
+                eprintln!("[voz] saída de áudio indisponível para {prov}.");
+            }
         }
-        Err(e) => eprintln!("[voz] Gemini indisponível ({e}); usando a voz de reserva."),
-        Ok(()) => eprintln!("[voz] saída de áudio indisponível; usando a voz de reserva."),
     }
+
+    // Se todos os provedores em nuvem falharem, aciona a reserva local do macOS (Siri Natural Voz 2)
     audio::dizer(base, &ajustar_fonetica(texto, &carregar_regras(base, true)));
 }
 

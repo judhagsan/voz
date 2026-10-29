@@ -1,15 +1,31 @@
 {
+  "provedores": [
+    "gemini",
+    "elevenlabs",
+    "openai"
+  ],
   "gemini": {
     "modelos": [
       "gemini-3.8-flash-tts",
-      "gemini-3.8-flash-lite-tts"
+      "gemini-3.8-flash-lite-tts",
+      "gemini-3.1-flash-tts-preview",
+      "gemini-2.5-flash-preview-tts",
+      "gemini-2.5-pro-preview-tts"
     ],
     "voz": "Vindemiatrix",
     "estilo": "Português do Brasil, sotaque brasileiro. Voz feminina calma, natural e profissional.",
     "modelo_resumo": "gemini-3.5-flash-lite"
   },
+  "elevenlabs": {
+    "modelo": "eleven_turbo_v2_5",
+    "voz_id": "21m00Tcm4TlvDq8ikWAM"
+  },
+  "openai": {
+    "modelo": "tts-1",
+    "voz": "nova"
+  },
   "reserva": {
-    "voz": "Luciana"
+    "voz": "Voz 2"
   },
   "frases": {
     "terminei": ["Pronto por aqui, já pode conferir!"],

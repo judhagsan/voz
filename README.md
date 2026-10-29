@@ -2,7 +2,7 @@
 
 Voz para o terminal do macOS. Quando um agente de programação termina uma tarefa, pede permissão ou fica esperando você, o Voz avisa em voz alta, e no fim de cada tarefa fala um resumo curto do que foi feito. No terminal, o comando `voz` mostra um painel com o estado dos seus repositórios e das cotas de uso dos agentes.
 
-A voz é a **Vindemiatrix** do Gemini, gerada sob demanda e tocada enquanto chega. Nenhum áudio fica guardado, nem no disco nem no Git. Sem chave ou sem internet, os avisos saem pela voz do próprio macOS (`say`).
+A voz é gerada em streaming com suporte a múltiplos provedores de IA (Gemini, ElevenLabs, OpenAI) e rotação de múltiplas chaves de API com cascata automática, mantendo sempre a voz feminina em todos os níveis. Nenhum áudio fica guardado, nem no disco nem no Git. Se faltar internet, chave ou esgotar a cota dos provedores de nuvem, a fala sai pela voz neural local do macOS (Siri Natural `Voz 2`), com fallback para o `say` padrão.
 
 ---
 
@@ -15,29 +15,36 @@ evento do agente ─▶ voz.sh ─▶ voz
                                ├─ terminei ──────────▶ resumo da resposta ─┐
                                ├─ permissao, espera ─▶ frase do config ────┤
                                │                                           ▼
-                               │                     voz do Gemini, em streaming ─▶ alto-falante
-                               │
-                               └─ sem chave ou sem internet ─▶ say do macOS
+                               │   cascata de provedores (streaming 24 kHz) ─▶ alto-falante
+                               │   ├─ Gemini (chaves sequenciais + modelos em cascata)
+                               │   ├─ ElevenLabs (chaves sequenciais + streaming PCM)
+                               │   ├─ OpenAI (chaves sequenciais + streaming PCM)
+                               │   ▼
+                               └─ sem chave ou offline ─▶ Siri Natural (Voz 2) / say do macOS
 ```
 
 1. **Fim de tarefa (`terminei`):** o `voz` lê na conversa o que você pediu e a resposta final do agente. Um modelo de texto do Gemini (`gemini-3.5-flash-lite`) escreve um resumo falado de até 40 palavras, com o projeto, o resultado e, se for o caso, a decisão que o agente espera de você. Leva cerca de 1 segundo.
 2. **Permissão e espera:** fala uma frase curta, sorteada entre as do `config.json` sem repetir a anterior. No Antigravity, o aviso de permissão só toca quando o comando realmente espera aprovação manual.
 3. **Pronúncia:** antes da voz, o texto passa pelo dicionário `fonetica.json`, para nomes que nenhuma voz acerta sozinha (como `judhagsan`).
-4. **Voz:** os modelos do Gemini (`gemini-3.8-flash-tts` e `gemini-3.8-flash-lite-tts`, em cascata automática de cota) devolvem o áudio em pedaços, e a fala começa no primeiro deles, cerca de 1,5 segundo depois do pedido. O áudio vai direto para a saída de som do macOS (CoreAudio), sem passar por arquivo.
+4. **Voz e Provedores em Cascata:** o `voz` percorre a lista de provedores configurada (`provedores`). Para cada provedor, percorre todas as chaves cadastradas no Keychain (`servico`, `servico-2`, `servico-3`...). Se um provedor ou chave sofrer erro ou esgotar a cota (HTTP 429), ele passa instantaneamente para a próxima chave ou próximo provedor. Todos os provedores de nuvem devolvem PCM linear de 16-bit a 24 kHz sem arquivos intermediários, tocando direto no CoreAudio assim que o primeiro pedaço chega.
 5. **Fila:** quando vários agentes terminam ao mesmo tempo, as falas tocam uma depois da outra, sem se atropelar.
-6. **Reserva:** se a chave faltar, a internet cair ou as cotas acabarem, a mesma frase sai pelo `say` do macOS (voz feminina `Luciana`), com o dicionário completo de pronúncia. Sem o resumo, a narração usa o começo da resposta, cortado no mesmo tamanho.
+6. **Reserva Local (Siri Natural AI):** se as chaves faltarem, a internet cair ou as cotas de nuvem acabarem, a fala sai pela voz neural local feminina do macOS (`Voz 2` - Sandra), com fallback para o `say` padrão, com o dicionário completo de pronúncia. Sem o resumo por IA, a narração usa o começo da resposta, cortado no mesmo tamanho.
 
 ---
 
 ## Painel no terminal
 
 ```zsh
-voz          # todos os repositórios, os que estão em andamento no topo
-voz -a       # só os que estão em andamento
-voz -w       # modo contínuo: atualiza a cada 1 segundo
-voz -w 10    # modo contínuo com outro intervalo, em segundos
+voz
+voz -a
+voz -w
+voz -w 10
 ```
 
+- `voz`: todos os repositórios, com os que estão em andamento no topo.
+- `voz -a`: só os repositórios que estão em andamento.
+- `voz -w`: modo contínuo, atualizando a cada 1 segundo.
+- `voz -w 10`: modo contínuo com intervalo customizado em segundos.
 - **Tabela de repositórios:** para cada repositório na sua pasta pessoal, mostra a branch ativa e os arquivos modificados, quantos commits faltam enviar (`↑`) ou puxar (`↓`) e os Pull Requests abertos, com quantos commits cada um tem.
 - **Cotas dos agentes:** ao lado da tabela, quanto já foi usado da janela de 5 horas e da semana de cada agente, e quando cada uma renova. Os números vêm das próprias ferramentas, sem gastar cota, e são relidos a cada 2 minutos.
 - **Modo contínuo (`-w`):** fala um resumo das pendências ao abrir e se ajusta quando o painel do `tmux` muda de tamanho. Quando a tabela e as cotas não cabem lado a lado, as cotas descem para baixo da tabela.
@@ -54,7 +61,7 @@ O instalador verifica e instala, via Homebrew:
 - **Rust (`cargo`)** (para compilar o binário `voz`)
 - **Command Line Tools da Apple** (o `cargo` precisa delas; se faltarem, o instalador avisa para rodar `xcode-select --install`)
 
-A **chave da API do Gemini** é opcional: sem ela, só a voz de reserva funciona.
+Chaves de API são opcionais: sem nenhuma configurada, a voz neural local do macOS (Siri Natural) funciona offline.
 
 ---
 
@@ -70,7 +77,7 @@ Ou, com o repositório já clonado:
 chmod +x ~/.claude/voz/instalar.sh && ~/.claude/voz/instalar.sh
 ```
 
-O instalador compila o `voz`, cria o atalho em `~/.local/bin/voz`, registra os hooks nos agentes (rodar de novo só atualiza, sem duplicar), vincula o `tmux.conf` e avisa se a chave do Gemini ainda não estiver salva. Se encontrar restos de uma versão antiga do Voz (o motor de voz em Python, o ambiente `.venv` e o gancho de pre-commit que ela criava), ele os remove. Depois, recarregue o shell:
+O instalador compila o `voz`, cria o atalho em `~/.local/bin/voz`, registra os hooks nos agentes (rodar de novo só atualiza, sem duplicar), vincula o `tmux.conf` e verifica as chaves salvas no Keychain. Se encontrar restos de uma versão antiga do Voz (o motor de voz em Python, o ambiente `.venv` e o gancho de pre-commit que ela criava), ele os remove. Depois, recarregue o shell:
 
 ```zsh
 source ~/.zshrc
@@ -78,26 +85,67 @@ source ~/.zshrc
 
 ---
 
-## Como conectar a voz (Gemini)
+## Como conectar a voz (Provedores e Chaves)
 
-1. Crie uma chave em [Google AI Studio](https://aistudio.google.com/apikey).
-2. Salve a chave no Keychain do macOS. Ela é pedida duas vezes e não aparece na tela; rode numa janela de terminal comum, para não ficar registrada em histórico de ferramenta nenhuma:
+As chaves são salvas com segurança no Keychain do macOS, sem nunca ficar registradas em arquivos do repositório ou do disco.
 
-   ```zsh
-   security add-generic-password -a "$USER" -s gemini-api-key -w
-   ```
+O `voz` suporta **múltiplas chaves** para o mesmo serviço: ao atingir limite diário ou cota (429), o sistema tenta a chave `-2`, depois `-3`, e assim sucessivamente antes de pular para o próximo provedor.
 
-3. Teste:
+### 1. Gemini (Principal gratuito / pago)
 
-   ```zsh
-   voz sintetizar "Pronto, a voz está funcionando."
-   ```
+Crie chaves em [Google AI Studio](https://aistudio.google.com/apikey).
 
-A chave nunca fica em arquivo do repositório. Para trocá-la, rode o mesmo comando com `-U` logo depois de `add-generic-password`.
+Salvar chave principal:
+```zsh
+security add-generic-password -a "$USER" -s gemini-api-key -w
+```
 
-**Privacidade:** na narração, o pedido e a resposta final do agente vão para o modelo que escreve o resumo, e o resumo vai para a voz. No plano gratuito da API, o Google pode usar esses textos e áudios para melhorar os produtos, inclusive com revisão humana. Ativar a cobrança no projeto do Google AI Studio tira esse uso.
+Salvar chave secundária para contornar limite diário de requisições:
+```zsh
+security add-generic-password -a "$USER" -s gemini-api-key-2 -w
+```
 
-**Custo:** no plano pago, uma narração (resumo e cerca de 15 segundos de voz) sai por cerca de US$ 0,003, e um aviso curto, por menos de US$ 0,001. É uma estimativa feita com os preços de outubro de 2026, que dobram em janeiro de 2027. Confira a [página de preços](https://ai.google.dev/gemini-api/docs/pricing).
+### 2. ElevenLabs (Opcional)
+
+Crie sua chave em [ElevenLabs](https://elevenlabs.io).
+
+Salvar chave principal:
+```zsh
+security add-generic-password -a "$USER" -s elevenlabs-api-key -w
+```
+
+Salvar chave secundária:
+```zsh
+security add-generic-password -a "$USER" -s elevenlabs-api-key-2 -w
+```
+
+### 3. OpenAI (Opcional)
+
+Crie sua chave em [OpenAI Platform](https://platform.openai.com/api-keys).
+
+Salvar chave principal:
+```zsh
+security add-generic-password -a "$USER" -s openai-api-key -w
+```
+
+Salvar chave secundária:
+```zsh
+security add-generic-password -a "$USER" -s openai-api-key-2 -w
+```
+
+### 4. Siri Natural AI (macOS 27 - Local)
+
+A voz local neural da Siri (`Voz 2` - Sandra pt-BR) já vem integrada no sistema, funciona 100% offline via Apple Neural Engine (ANE) e não requer chave nem internet. Ela atua como reserva imediata se nenhuma chave de nuvem responder.
+
+### Testar a síntese
+
+```zsh
+voz sintetizar "Pronto, a voz está funcionando perfeitamente."
+```
+
+Para atualizar qualquer chave existente no Keychain, basta adicionar `-U` ao comando `security add-generic-password`.
+
+**Privacidade:** na narração, o pedido e a resposta final do agente vão para o modelo que escreve o resumo, e o resumo vai para a voz. No plano gratuito da API Gemini, o Google pode usar esses textos e áudios para melhorar produtos; habilitar o billing no Google AI Studio remove essa retenção.
 
 ---
 
@@ -107,11 +155,16 @@ A chave nunca fica em arquivo do repositório. Para trocá-la, rode o mesmo coma
 
 | Chave | O que faz | Padrão |
 | :--- | :--- | :--- |
-| `gemini.modelos` | Lista de modelos da voz em cascata de cota (tenta o seguinte em caso de 429). | `["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"]` |
-| `gemini.voz` | Voz do Gemini. | `Vindemiatrix` |
-| `gemini.estilo` | Sotaque e tom, em linguagem natural. | português do Brasil, calma, natural, profissional |
+| `provedores` | Lista com a ordem dos provedores para síntese de voz. | `["gemini", "elevenlabs", "openai"]` |
+| `gemini.modelos` | Modelos de voz do Gemini em cascata de cota (TTS dedicados priorizados). | `["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"]` |
+| `gemini.voz` | Nome da voz do Gemini. | `Vindemiatrix` |
+| `gemini.estilo` | Sotaque e tom em linguagem natural. | português do Brasil, calma, natural, profissional |
 | `gemini.modelo_resumo` | Modelo de texto que escreve o resumo da narração. | `gemini-3.5-flash-lite` |
-| `reserva.voz` | Voz de reserva do `say` do macOS quando todos os modelos Gemini estiverem indisponíveis. | `Luciana` |
+| `elevenlabs.modelo` | Modelo do ElevenLabs para geração de áudio. | `eleven_turbo_v2_5` |
+| `elevenlabs.voz_id` | ID da voz no ElevenLabs. | `21m00Tcm4TlvDq8ikWAM` |
+| `openai.modelo` | Modelo de voz da OpenAI. | `tts-1` |
+| `openai.voz` | Voz da OpenAI. | `nova` |
+| `reserva.voz` | Voz de reserva do `say` do macOS (Siri Natural). | `Voz 2` |
 | `frases.terminei`, `frases.permissao`, `frases.espera` | Listas de frases dos avisos; com mais de uma, o `voz` sorteia sem repetir a anterior. | uma frase cada |
 | `narrar.ativo` | Liga ou desliga a narração no fim das tarefas. | `true` |
 | `narrar.min_segundos` | Só narra tarefas que duraram pelo menos esse tempo. | `0` |
@@ -139,11 +192,16 @@ Configuração do `tmux`, vinculada em `~/.tmux.conf`: tema Dracula, cópia para
 ## Outros comandos
 
 ```zsh
-voz sintetizar "texto"                    # fala um texto com a voz configurada
-voz fonetica "texto"                      # mostra o texto depois do dicionário de pronúncia
-voz simular <conversa.jsonl> [pasta]      # mostra o resumo que a narração falaria
-voz tocar <arquivo>                       # toca um arquivo de áudio na fila de falas
+voz sintetizar "texto"
+voz fonetica "texto"
+voz simular conversa.jsonl pasta
+voz tocar arquivo.wav
 ```
+
+- `voz sintetizar`: fala um texto com a voz configurada.
+- `voz fonetica`: mostra o texto depois do dicionário de pronúncia.
+- `voz simular`: mostra o resumo que a narração falaria a partir de um log de conversa.
+- `voz tocar`: toca um arquivo de áudio na fila de falas.
 
 ---
 
@@ -183,7 +241,11 @@ cd ~/.claude/voz && gh repo fork judhagsan/voz --remote=true --remote-name=origi
 | `src/main.rs` | Entrada do binário: painel, hooks e comandos. |
 | `src/narrar.rs`, `src/transcript.rs` | Narração do fim de tarefa: lê a conversa e monta a fala. |
 | `src/resumo.rs` | Resumo da resposta pelo modelo de texto do Gemini. |
-| `src/fala.rs`, `src/gemini.rs`, `src/audio.rs` | Voz: escolha da frase, síntese em streaming, fila e reprodução. |
+| `src/fala.rs`, `src/audio.rs` | Controle de síntese, cascata de provedores, fila e reprodução no CoreAudio. |
+| `src/gemini.rs` | Síntese de voz em streaming pela API do Gemini (PCM 24 kHz). |
+| `src/elevenlabs.rs` | Síntese de voz em streaming pela API do ElevenLabs (PCM 24 kHz). |
+| `src/openai.rs` | Síntese de voz em streaming pela API da OpenAI (PCM 24 kHz). |
+| `src/keychain.rs` | Leitura segura e rotação sequencial de chaves no Keychain do macOS. |
 | `src/fonetica.rs` | Aplicação do dicionário de pronúncia. |
 | `src/agy.rs` | Decide se um comando do Antigravity espera aprovação manual. |
 | `src/painel.rs`, `src/cotas.rs`, `src/tela.rs` | Painel: repositórios, cotas dos agentes e desenho na tela. |
