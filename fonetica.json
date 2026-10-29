@@ -1,7 +1,8 @@
 {
   "descricao": "Pronúncia de termos na voz. 'termos' vale para toda voz (nomes que nenhuma acerta sozinha); 'termos_reserva' só para o say do macOS, que lê termos em inglês com fonética portuguesa.",
   "termos": {
-    "\\bjudhagsan\\b": "Judá-gê-sâm"
+    "\\bjudhagsan\\b": "Judá G San",
+    "\\bjson\\b": "Jêison"
   },
   "termos_reserva": {
     "\\bgithub\\b": "Guít-râb",
@@ -15,7 +16,6 @@
     "\\burls\\b": "U R Ls",
     "\\burl\\b": "U R L",
     "\\bui\\b": "U I",
-    "\\bjson\\b": "Jêison",
     "\\byaml\\b": "iâmol",
     "\\bsql\\b": "ése-quê-éle",
     "\\bwav\\b": "uáve",

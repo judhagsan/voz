@@ -7,8 +7,8 @@ pub struct RegraFonetica {
     pub substituicao: String,
 }
 
-/// Nomes próprios que nenhum motor acerta sozinho.
-const TERMOS_GERAIS: &[(&str, &str)] = &[(r"\bjudhagsan\b", "Judá-gê-sâm")];
+/// Nomes próprios e siglas técnicas que nenhum motor acerta sozinho.
+const TERMOS_GERAIS: &[(&str, &str)] = &[(r"\bjudhagsan\b", "Judá G San"), (r"\bjson\b", "Jêison")];
 
 /// Termos em inglês que a voz de reserva (`say`) lê com fonética portuguesa.
 /// O Gemini os pronuncia certo sozinho, e o respelling só atrapalharia.
@@ -24,7 +24,6 @@ const TERMOS_RESERVA: &[(&str, &str)] = &[
     (r"\burls\b", "U R Ls"),
     (r"\burl\b", "U R L"),
     (r"\bui\b", "U I"),
-    (r"\bjson\b", "Jêison"),
     (r"\byaml\b", "iâmol"),
     (r"\bsql\b", "ése-quê-éle"),
     (r"\bwav\b", "uáve"),
@@ -123,7 +122,7 @@ mod tests {
             let regras = regras_padrao(reserva);
             let entrada = "Trabalhando no repositório judhagsan agora.";
             let saida = ajustar_fonetica(entrada, &regras);
-            assert_eq!(saida, "Trabalhando no repositório Judá-gê-sâm agora.");
+            assert_eq!(saida, "Trabalhando no repositório Judá G San agora.");
         }
     }
 
@@ -132,7 +131,15 @@ mod tests {
         let regras = regras_padrao(false);
         let entrada = "Abri o PR da API no GitHub do judhagsan.";
         let saida = ajustar_fonetica(entrada, &regras);
-        assert_eq!(saida, "Abri o PR da API no GitHub do Judá-gê-sâm.");
+        assert_eq!(saida, "Abri o PR da API no GitHub do Judá G San.");
+    }
+
+    #[test]
+    fn test_gemini_converte_json() {
+        let regras = regras_padrao(false);
+        let entrada = "Atualizei o arquivo JSON e rodei o Git.";
+        let saida = ajustar_fonetica(entrada, &regras);
+        assert_eq!(saida, "Atualizei o arquivo Jêison e rodei o Git.");
     }
 
     #[test]
