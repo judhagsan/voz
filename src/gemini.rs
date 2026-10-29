@@ -36,12 +36,11 @@ impl Config {
                 .to_string()
         };
         Config {
-            modelo: campo("modelo", "gemini-3.8-flash-lite-tts"),
+            modelo: campo("modelo", "gemini-3.8-flash-tts"),
             voz: campo("voz", "Vindemiatrix"),
             estilo: campo(
                 "estilo",
-                "Português do Brasil, sotaque brasileiro. Voz calma e natural, um pouco grave, \
-                 com entonação viva mas contida, como uma colega contando o que terminou.",
+                "Português do Brasil, sotaque brasileiro. Voz feminina calma, natural e profissional.",
             ),
             modelo_resumo: campo("modelo_resumo", "gemini-3.5-flash-lite"),
         }
@@ -156,7 +155,7 @@ mod tests {
         let bloco = serde_json::json!({"voz": "Kore", "estilo": ""});
         let cfg = Config::de_json(Some(&bloco));
         assert_eq!(cfg.voz, "Kore");
-        assert_eq!(cfg.modelo, "gemini-3.8-flash-lite-tts");
+        assert_eq!(cfg.modelo, "gemini-3.8-flash-tts");
         assert_eq!(cfg.modelo_resumo, "gemini-3.5-flash-lite");
         assert!(cfg.estilo.contains("Português do Brasil"));
         assert_eq!(Config::de_json(None).voz, "Vindemiatrix");
@@ -166,7 +165,7 @@ mod tests {
     fn test_corpo_pedido_pede_stream_com_voz_estilo_e_texto() {
         let cfg = Config::de_json(None);
         let corpo = corpo_pedido(&cfg, "Fiz o commit.");
-        assert_eq!(corpo["model"], "gemini-3.8-flash-lite-tts");
+        assert_eq!(corpo["model"], "gemini-3.8-flash-tts");
         assert_eq!(corpo["stream"], true);
         assert_eq!(corpo["input"][0]["content"][0]["text"], "Fiz o commit.");
         assert_eq!(

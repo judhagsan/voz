@@ -1,8 +1,8 @@
 {
   "gemini": {
-    "modelo": "gemini-3.8-flash-lite-tts",
+    "modelo": "gemini-3.8-flash-tts",
     "voz": "Vindemiatrix",
-    "estilo": "Português do Brasil, sotaque brasileiro. Voz calma e natural, um pouco grave, com entonação viva mas contida, como uma colega contando o que terminou.",
+    "estilo": "Português do Brasil, sotaque brasileiro. Voz feminina calma, natural e profissional.",
     "modelo_resumo": "gemini-3.5-flash-lite"
   },
   "frases": {

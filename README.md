@@ -23,7 +23,7 @@ evento do agente ─▶ voz.sh ─▶ voz
 1. **Fim de tarefa (`terminei`):** o `voz` lê na conversa o que você pediu e a resposta final do agente. Um modelo de texto do Gemini (`gemini-3.5-flash-lite`) escreve um resumo falado de até 40 palavras, com o projeto, o resultado e, se for o caso, a decisão que o agente espera de você. Leva cerca de 1 segundo.
 2. **Permissão e espera:** fala uma frase curta, sorteada entre as do `config.json` sem repetir a anterior. No Antigravity, o aviso de permissão só toca quando o comando realmente espera aprovação manual.
 3. **Pronúncia:** antes da voz, o texto passa pelo dicionário `fonetica.json`, para nomes que nenhuma voz acerta sozinha (como `judhagsan`).
-4. **Voz:** o modelo `gemini-3.8-flash-lite-tts` devolve o áudio em pedaços, e a fala começa no primeiro deles, cerca de 1,5 segundo depois do pedido. O áudio vai direto para a saída de som do macOS (CoreAudio), sem passar por arquivo.
+4. **Voz:** o modelo `gemini-3.8-flash-tts` devolve o áudio em pedaços, e a fala começa no primeiro deles, cerca de 1,5 segundo depois do pedido. O áudio vai direto para a saída de som do macOS (CoreAudio), sem passar por arquivo.
 5. **Fila:** quando vários agentes terminam ao mesmo tempo, as falas tocam uma depois da outra, sem se atropelar.
 6. **Reserva:** se a chave faltar, a internet cair ou a cota acabar, a mesma frase sai pelo `say` do macOS, com o dicionário completo de pronúncia. Sem o resumo, a narração usa o começo da resposta, cortado no mesmo tamanho.
 
@@ -107,9 +107,9 @@ A chave nunca fica em arquivo do repositório. Para trocá-la, rode o mesmo coma
 
 | Chave | O que faz | Padrão |
 | :--- | :--- | :--- |
-| `gemini.modelo` | Modelo da voz. | `gemini-3.8-flash-lite-tts` |
+| `gemini.modelo` | Modelo da voz. | `gemini-3.8-flash-tts` |
 | `gemini.voz` | Voz do Gemini. | `Vindemiatrix` |
-| `gemini.estilo` | Sotaque e tom, em linguagem natural. | português do Brasil, calma, um pouco grave |
+| `gemini.estilo` | Sotaque e tom, em linguagem natural. | português do Brasil, calma, natural, profissional |
 | `gemini.modelo_resumo` | Modelo de texto que escreve o resumo da narração. | `gemini-3.5-flash-lite` |
 | `frases.terminei`, `frases.permissao`, `frases.espera` | Listas de frases dos avisos; com mais de uma, o `voz` sorteia sem repetir a anterior. | uma frase cada |
 | `narrar.ativo` | Liga ou desliga a narração no fim das tarefas. | `true` |
