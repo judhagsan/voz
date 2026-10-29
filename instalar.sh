@@ -95,6 +95,7 @@ destino = Path(sys.argv[1])
 voz_sh = str(destino / "voz.sh")
 
 cfg1 = Path.home() / ".claude" / "settings.json"
+cfg1.parent.mkdir(parents=True, exist_ok=True)
 dados1 = {}
 if cfg1.exists():
     try:
@@ -105,10 +106,17 @@ if cfg1.exists():
 hooks1 = dados1.setdefault("hooks", {})
 
 def garantir_hook_lista(lista, cmd, matcher=None, async_flag=True, timeout=None):
+    # Identifica pelo comando exato: permissao e espera ficam na mesma lista e
+    # um não pode sobrescrever o outro. Hook que já existe recebe os valores
+    # atuais de matcher, async e timeout.
     for item in lista:
         for h in item.get("hooks", []):
-            if voz_sh in h.get("command", ""):
-                h["command"] = cmd
+            if h.get("command") == cmd:
+                h["async"] = async_flag
+                if timeout:
+                    h["timeout"] = timeout
+                if matcher is not None:
+                    item["matcher"] = matcher
                 return
     bloco_h = {"type": "command", "command": cmd, "async": async_flag}
     if timeout:
@@ -118,7 +126,7 @@ def garantir_hook_lista(lista, cmd, matcher=None, async_flag=True, timeout=None)
         novo["matcher"] = matcher
     lista.append(novo)
 
-garantir_hook_lista(hooks1.setdefault("Stop", []), f"{voz_sh} terminei", timeout=90)
+garantir_hook_lista(hooks1.setdefault("Stop", []), f"{voz_sh} terminei", timeout=600)
 garantir_hook_lista(
     hooks1.setdefault("Notification", []),
     f"{voz_sh} permissao",
