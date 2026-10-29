@@ -49,6 +49,7 @@ pub fn carregar_regras(base: &Path) -> Vec<RegraFonetica> {
 
 pub fn regras_padrao() -> Vec<RegraFonetica> {
     let termos = [
+        (r"\bjudhagsan\b", "Judágêssam"),
         (r"\bgithub\b", "Guít-râb"),
         (r"\bgitlab\b", "Guít-lébi"),
         (r"\bgit\b", "Guite"),
@@ -116,5 +117,13 @@ mod tests {
         let entrada = "Rodei a CLI para gerar JSON e WAV.";
         let saida = ajustar_fonetica(entrada, &regras);
         assert_eq!(saida, "Rodei a C L I para gerar Jêison e uáve.");
+    }
+
+    #[test]
+    fn test_ajustar_fonetica_judhagsan() {
+        let regras = regras_padrao();
+        let entrada = "Trabalhando no repositório judhagsan agora.";
+        let saida = ajustar_fonetica(entrada, &regras);
+        assert_eq!(saida, "Trabalhando no repositório Judágêssam agora.");
     }
 }
