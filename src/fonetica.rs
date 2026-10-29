@@ -8,7 +8,7 @@ pub struct RegraFonetica {
 }
 
 /// Nomes próprios e siglas técnicas que nenhum motor acerta sozinho.
-const TERMOS_GERAIS: &[(&str, &str)] = &[(r"\bjudhagsan\b", "Judá G San"), (r"\bjson\b", "Jêison")];
+const TERMOS_GERAIS: &[(&str, &str)] = &[(r"\bjudhagsan\b", "Judágê-San"), (r"\bjson\b", "Jêison")];
 
 /// Termos em inglês que a voz de reserva (`say`) lê com fonética portuguesa.
 /// O Gemini os pronuncia certo sozinho, e o respelling só atrapalharia.
@@ -122,7 +122,7 @@ mod tests {
             let regras = regras_padrao(reserva);
             let entrada = "Trabalhando no repositório judhagsan agora.";
             let saida = ajustar_fonetica(entrada, &regras);
-            assert_eq!(saida, "Trabalhando no repositório Judá G San agora.");
+            assert_eq!(saida, "Trabalhando no repositório Judágê-San agora.");
         }
     }
 
@@ -131,7 +131,7 @@ mod tests {
         let regras = regras_padrao(false);
         let entrada = "Abri o PR da API no GitHub do judhagsan.";
         let saida = ajustar_fonetica(entrada, &regras);
-        assert_eq!(saida, "Abri o PR da API no GitHub do Judá G San.");
+        assert_eq!(saida, "Abri o PR da API no GitHub do Judágê-San.");
     }
 
     #[test]
