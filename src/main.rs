@@ -79,7 +79,9 @@ fn disparar_desacoplado(categoria: &str, entrada: &str) {
     if let Ok(mut f) = filho {
         if let Some(mut entrada_filho) = f.stdin.take() {
             use std::io::Write;
-            entrada_filho.write_all(entrada.as_bytes()).ok();
+            let _ = entrada_filho.write_all(entrada.as_bytes());
+            let _ = entrada_filho.flush();
+            drop(entrada_filho);
         }
     }
 }
@@ -103,6 +105,30 @@ fn main() {
         return;
     }
 
+    if args.get(1).map(String::as_str) == Some("--agy-verificar-permissao") {
+        let token = ler_stdin();
+        std::thread::sleep(std::time::Duration::from_millis(750));
+        let pendente_file = base.join("estado").join("agy-pendente");
+        if let Ok(conteudo) = fs::read_to_string(&pendente_file) {
+            if conteudo.trim() == token.trim() {
+                processar_aviso(&base, "permissao", "");
+            }
+        }
+        return;
+    }
+
+    if args.get(1).map(String::as_str) == Some("--agy-verificar-espera") {
+        let token = ler_stdin();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let pendente_file = base.join("estado").join("agy-pendente");
+        if let Ok(conteudo) = fs::read_to_string(&pendente_file) {
+            if conteudo.trim() == token.trim() {
+                processar_aviso(&base, "espera", "");
+            }
+        }
+        return;
+    }
+
     if args.len() > 1 && args[1] == "--agy" {
         let categoria = args.get(2).map(|s| s.as_str()).unwrap_or("");
         let entrada = ler_stdin();
@@ -121,15 +147,21 @@ fn main() {
                     .map(|d| d.subsec_nanos() % 10000)
                     .unwrap_or(0);
                 let token = format!("{}-{}", std::process::id(), nanos);
-                fs::write(&pendente_file, &token).ok();
 
-                // Só avisa quando o comando espera aprovação de verdade; a fala
-                // sai num processo à parte para não segurar o agente.
-                if agy::agy_precisa_permissao(&entrada) {
-                    println!("{{\"decision\": \"ask\"}}");
-                    disparar_desacoplado("permissao", "");
-                } else {
-                    println!("{{\"decision\": \"allow\"}}");
+                match agy::analisar_pre_tool(&entrada) {
+                    agy::AgyDecisao::Allow => {
+                        println!("{{\"decision\": \"allow\"}}");
+                    }
+                    agy::AgyDecisao::Espera => {
+                        fs::write(&pendente_file, &token).ok();
+                        println!("{{\"decision\": \"allow\"}}");
+                        disparar_desacoplado("--agy-verificar-espera", &token);
+                    }
+                    agy::AgyDecisao::Ask => {
+                        fs::write(&pendente_file, &token).ok();
+                        println!("{{\"decision\": \"ask\"}}");
+                        disparar_desacoplado("--agy-verificar-permissao", &token);
+                    }
                 }
             }
             _ => {
