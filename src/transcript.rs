@@ -163,6 +163,14 @@ pub fn extrair_resumo_multiplo(projetos: &[String]) -> String {
 }
 
 pub fn ultimo_turno(transcript_path: &Path) -> (Option<f64>, String, Option<String>) {
+    turno_codex(transcript_path, None)
+}
+
+/// `turn_id` fixa o turno do hook assíncrono, mesmo se outro já tiver começado.
+pub fn turno_codex(
+    transcript_path: &Path,
+    turn_id: Option<&str>,
+) -> (Option<f64>, String, Option<String>) {
     let file = match File::open(transcript_path) {
         Ok(f) => f,
         Err(_) => return (None, String::new(), None),
@@ -172,6 +180,7 @@ pub fn ultimo_turno(transcript_path: &Path) -> (Option<f64>, String, Option<Stri
     let mut inicio: Option<f64> = None;
     let mut pedido = String::new();
     let mut textos: Vec<String> = Vec::new();
+    let mut turno_selecionado = turn_id.is_none();
 
     for line in reader.lines().map_while(Result::ok) {
         let v: serde_json::Value = match serde_json::from_str(&line) {
@@ -180,6 +189,105 @@ pub fn ultimo_turno(transcript_path: &Path) -> (Option<f64>, String, Option<Stri
         };
 
         let tipo = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+        // Codex: eventos do ciclo de vida e mensagens estruturadas do rollout.
+        if tipo == "event_msg" {
+            let payload = &v["payload"];
+            let evento = payload.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if evento == "task_started" {
+                turno_selecionado = turn_id
+                    .is_none_or(|id| payload.get("turn_id").and_then(|t| t.as_str()) == Some(id));
+                if turno_selecionado {
+                    inicio = v
+                        .get("timestamp")
+                        .and_then(|t| t.as_str())
+                        .and_then(|t| chrono_to_ts(t).ok());
+                    pedido.clear();
+                    textos.clear();
+                }
+            }
+            if !turno_selecionado {
+                continue;
+            }
+            match evento {
+                "user_message" => {
+                    if let Some(mensagem) = payload.get("message").and_then(|m| m.as_str()) {
+                        pedido = mensagem.to_string();
+                        textos.clear();
+                        if inicio.is_none() {
+                            inicio = v
+                                .get("timestamp")
+                                .and_then(|t| t.as_str())
+                                .and_then(|t| chrono_to_ts(t).ok());
+                        }
+                    }
+                }
+                "agent_message" if fase_final(payload) => {
+                    if let Some(mensagem) = payload
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .filter(|m| !m.trim().is_empty())
+                    {
+                        textos = vec![mensagem.to_string()];
+                    }
+                }
+                "task_complete" => {
+                    if let Some(mensagem) = payload
+                        .get("last_agent_message")
+                        .and_then(|m| m.as_str())
+                        .filter(|m| !m.trim().is_empty())
+                    {
+                        textos = vec![mensagem.to_string()];
+                    }
+                }
+                "turn_aborted" => textos.clear(),
+                _ => {}
+            }
+            continue;
+        }
+        if tipo == "response_item" {
+            if !turno_selecionado {
+                continue;
+            }
+            let payload = &v["payload"];
+            match payload.get("type").and_then(|t| t.as_str()) {
+                Some("message") => {
+                    let texto = payload
+                        .get("content")
+                        .and_then(|c| c.as_array())
+                        .into_iter()
+                        .flatten()
+                        .filter(|c| {
+                            matches!(
+                                c.get("type").and_then(|t| t.as_str()),
+                                Some("input_text" | "output_text")
+                            )
+                        })
+                        .filter_map(|c| c.get("text").and_then(|t| t.as_str()))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    match payload.get("role").and_then(|r| r.as_str()) {
+                        Some("user") if !texto.trim().is_empty() => {
+                            pedido = texto;
+                            textos.clear();
+                            if inicio.is_none() {
+                                inicio = v
+                                    .get("timestamp")
+                                    .and_then(|t| t.as_str())
+                                    .and_then(|t| chrono_to_ts(t).ok());
+                            }
+                        }
+                        Some("assistant") if fase_final(payload) && !texto.trim().is_empty() => {
+                            textos = vec![texto]
+                        }
+                        _ => {}
+                    }
+                }
+                Some("function_call" | "custom_tool_call" | "web_search_call") => textos.clear(),
+                _ => {}
+            }
+            continue;
+        }
 
         // Claude CLI: mensagem de usuário
         if tipo == "user" {
@@ -270,22 +378,118 @@ pub fn ultimo_turno(transcript_path: &Path) -> (Option<f64>, String, Option<Stri
 }
 
 fn chrono_to_ts(iso: &str) -> Result<f64, ()> {
-    // Parser simples para timestamp ISO 8601 sem chrono externo
-    // Ex: 2026-10-29T00:45:11-03:00
-    if iso.len() >= 19 {
-        // Devolve timestamp de time::SystemTime como fallback aproximado
-        Ok(std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0))
-    } else {
-        Err(())
-    }
+    chrono::DateTime::parse_from_rfc3339(iso)
+        .map(|d| d.timestamp_millis() as f64 / 1000.0)
+        .map_err(|_| ())
+}
+
+fn fase_final(payload: &serde_json::Value) -> bool {
+    matches!(
+        payload.get("phase").and_then(|p| p.as_str()),
+        None | Some("final_answer")
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ler_fixture(
+        nome: &str,
+        texto: &str,
+        turno: Option<&str>,
+    ) -> (Option<f64>, String, Option<String>) {
+        let arquivo = std::env::temp_dir().join(format!(
+            "voz-transcript-{nome}-{}.jsonl",
+            std::process::id()
+        ));
+        std::fs::write(&arquivo, texto).unwrap();
+        let resultado = turno_codex(&arquivo, turno);
+        std::fs::remove_file(arquivo).unwrap();
+        resultado
+    }
+
+    const CODEX: &str = r#"
+{"type":"event_msg","timestamp":"2026-11-01T15:00:00Z","payload":{"type":"task_started","turn_id":"primeiro"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Integre a voz ao Codex."}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Vou verificar os hooks."}]}}
+{"type":"response_item","payload":{"type":"reasoning","summary":[{"text":"Raciocínio privado"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"segredo"}}
+{"type":"response_item","payload":{"type":"function_call_output","output":"saída que não deve ser narrada"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Integrei o Voz e validei os hooks."}]}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"primeiro","last_agent_message":"Integrei o Voz e validei os hooks."}}
+{"type":"event_msg","timestamp":"2026-11-01T15:05:00Z","payload":{"type":"task_started","turn_id":"segundo"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Agora ajuste a tela."}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Ajustei a tela do painel."}]}}
+"#;
+
+    #[test]
+    fn codex_le_ultimo_turno_e_ignora_comentarios_ferramentas_e_raciocinio() {
+        let (inicio, pedido, resposta) = ler_fixture("atual", CODEX, None);
+        assert_eq!(inicio, Some(1793545500.0));
+        assert_eq!(pedido, "Agora ajuste a tela.");
+        assert_eq!(resposta.as_deref(), Some("Ajustei a tela do painel."));
+    }
+
+    #[test]
+    fn codex_hook_assincrono_fica_no_turno_original_sem_duplicar_resposta() {
+        let (inicio, pedido, resposta) = ler_fixture("fixo", CODEX, Some("primeiro"));
+        assert_eq!(inicio, Some(1793545200.0));
+        assert_eq!(pedido, "Integre a voz ao Codex.");
+        assert_eq!(
+            resposta.as_deref(),
+            Some("Integrei o Voz e validei os hooks.")
+        );
+    }
+
+    #[test]
+    fn codex_interrompido_nao_reaproveita_resposta_antiga() {
+        let texto = format!(
+            "{CODEX}\n{}",
+            r#"{"type":"event_msg","payload":{"type":"turn_aborted"}}"#
+        );
+        let (_, _, resposta) = ler_fixture("interrompido", &texto, None);
+        assert_eq!(resposta, None);
+    }
+
+    #[test]
+    fn codex_aceita_eventos_antigos_sem_narrar_duas_vezes() {
+        let texto = r#"
+{"type":"event_msg","timestamp":"2026-11-01T15:00:00Z","payload":{"type":"user_message","message":"Revise o projeto."}}
+{"type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"Vou revisar."}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Revisei o projeto e corrigi os erros."}]}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"Revisei o projeto e corrigi os erros."}}
+"#;
+        let (inicio, pedido, resposta) = ler_fixture("antigo", texto, None);
+        assert_eq!(inicio, Some(1793545200.0));
+        assert_eq!(pedido, "Revise o projeto.");
+        assert_eq!(
+            resposta.as_deref(),
+            Some("Revisei o projeto e corrigi os erros.")
+        );
+    }
+
+    #[test]
+    fn preserva_leitura_do_claude_e_antigravity() {
+        let claude = r#"
+{"type":"user","message":{"content":[{"type":"text","text":"Corrija o teste."}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Vou corrigir."}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","content":"resultado"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Corrigi e o teste passou."}]}}
+"#;
+        let (_, pedido, resposta) = ler_fixture("claude", claude, None);
+        assert_eq!(pedido, "Corrija o teste.");
+        assert_eq!(resposta.as_deref(), Some("Corrigi e o teste passou."));
+        let agy = r#"
+{"type":"USER_INPUT","created_at":"2026-11-01T12:00:00-03:00","content":"Corrija o teste."}
+{"type":"PLANNER_RESPONSE","content":"Vou corrigir.","tool_calls":[{}]}
+{"type":"PLANNER_RESPONSE","content":"Corrigi e o teste passou.","tool_calls":[]}
+"#;
+        let (inicio, pedido, resposta) = ler_fixture("agy", agy, None);
+        assert_eq!(inicio, Some(1793545200.0));
+        assert_eq!(pedido, "Corrija o teste.");
+        assert_eq!(resposta.as_deref(), Some("Corrigi e o teste passou."));
+    }
 
     #[test]
     fn test_limpar_linha() {

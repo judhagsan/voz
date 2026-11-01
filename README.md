@@ -23,7 +23,7 @@ evento do agente ─▶ voz.sh ─▶ voz
                                └─ sem chave ou offline ─▶ Siri Natural (Voz 2) / say do macOS
 ```
 
-1. **Fim de tarefa (`terminei`):** o `voz` lê na conversa o que você pediu e a resposta final do agente. Um modelo de texto do Gemini (`gemini-3.5-flash-lite`) escreve um resumo falado de até 40 palavras, com o projeto, o resultado e, se for o caso, a decisão que o agente espera de você. Leva cerca de 1 segundo.
+1. **Fim de tarefa (`terminei`):** o `voz` lê na conversa do Claude, Antigravity ou Codex o que você pediu e a resposta final do agente. Um modelo de texto do Gemini (`gemini-3.5-flash-lite`) escreve um resumo falado de até 40 palavras, com o projeto, o resultado e, se for o caso, a decisão que o agente espera de você. Leva cerca de 1 segundo.
 2. **Permissão e espera:** fala uma frase curta, sorteada entre as do `config.json` sem repetir a anterior. No Antigravity, o aviso de permissão só toca quando o comando realmente espera aprovação manual.
 3. **Pronúncia:** antes da voz, o texto passa pelo dicionário `fonetica.json`, para nomes que nenhuma voz acerta sozinha (como `judhagsan`).
 4. **Voz e Provedores em Cascata:** o `voz` percorre a lista de provedores configurada (`provedores`). Para cada provedor, percorre todas as chaves cadastradas no Keychain (`servico`, `servico-2`, `servico-3`...). Se um provedor ou chave sofrer erro ou esgotar a cota (HTTP 429), ele passa instantaneamente para a próxima chave ou próximo provedor. Todos os provedores de nuvem devolvem PCM linear de 16-bit a 24 kHz sem arquivos intermediários, tocando direto no CoreAudio assim que o primeiro pedaço chega.
@@ -46,8 +46,10 @@ voz -w 10
 - `voz -w`: modo contínuo, atualizando a cada 1 segundo.
 - `voz -w 10`: modo contínuo com intervalo customizado em segundos.
 - **Tabela de repositórios:** para cada repositório na sua pasta pessoal, mostra a branch ativa e os arquivos modificados, quantos commits faltam enviar (`↑`) ou puxar (`↓`) e os Pull Requests abertos, com quantos commits cada um tem.
-- **Cotas dos agentes:** ao lado da tabela, quanto já foi usado da janela de 5 horas e da semana de cada agente, e quando cada uma renova. Os números vêm das próprias ferramentas, sem gastar cota, e são relidos a cada 2 minutos.
+- **Cotas dos agentes:** ao lado da tabela, quanto já foi usado de cada janela e quando ela renova. Inclui Claude Code, Antigravity e os limites do Codex na conta ChatGPT conectada (**ChatGPT / Codex**). Os números vêm das próprias ferramentas, sem turno de modelo, e são relidos a cada 2 minutos.
 - **Modo contínuo (`-w`):** fala um resumo das pendências ao abrir e se ajusta quando o painel do `tmux` muda de tamanho. Quando a tabela e as cotas não cabem lado a lado, as cotas descem para baixo da tabela.
+
+O ChatGPT / Codex usa [`account/rateLimits/read`](https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt) pela CLI autenticada. Se a consulta falhar, o Voz procura a última cota registrada em `$CODEX_HOME/sessions` (por padrão, `~/.codex/sessions`) e mostra **Histórico de dia/mês hora:minuto**: esse percentual é o da data indicada. Funciona independentemente da pasta em que o Codex foi aberto ou do uso do `ai-memory`. As janelas seguem a duração informada pela conta, inclusive quando ela difere de 5 horas ou uma semana.
 
 ---
 
@@ -82,6 +84,28 @@ O instalador compila o `voz`, cria o atalho em `~/.local/bin/voz`, registra os h
 ```zsh
 source ~/.zshrc
 ```
+
+### Codex
+
+O instalador acrescenta três [hooks do Codex](https://learn.chatgpt.com/docs/hooks) em `$CODEX_HOME/hooks.json` (por padrão, `~/.codex/hooks.json`), preservando os hooks existentes, inclusive os do `ai-memory`:
+
+| Evento | Aviso do Voz |
+| :--- | :--- |
+| `Stop` | Resume e lê a resposta final da tarefa. |
+| `PermissionRequest` | Avisa quando o Codex precisa de permissão para uma ação. |
+| `PreToolUse` de `request_user_input` ou `request_user_input_async` | Avisa quando há uma pergunta esperando sua resposta. |
+
+Todos rodam em segundo plano e devolvem apenas `{}` ao Codex. O Voz usa a mesma configuração de resumo, pronúncia, provedores e fila de áudio dos outros agentes. Para o resumo, prioriza `last_assistant_message` do evento e busca o pedido no turno correspondente do histórico; comentários intermediários, raciocínio e saídas de ferramentas não entram na leitura.
+
+**Ativação:** reabra o Codex, execute `/hooks` e revise/confie nos três hooks que chamam `voz.sh --codex`. O Codex exige essa revisão para executar hooks novos ou alterados; o instalador não modifica as configurações de confiança.
+
+Se o Voz já estiver compilado, registre somente a integração do Codex com:
+
+```zsh
+python3 ~/.claude/voz/scripts/instalar_hooks.py --agente codex
+```
+
+O script guarda uma cópia inicial em `hooks.json.voz.bak`. Se o JSON existente estiver inválido, interrompe a instalação sem substituir o arquivo.
 
 ---
 
@@ -234,6 +258,7 @@ cd ~/.claude/voz && gh repo fork judhagsan/voz --remote=true --remote-name=origi
 | :--- | :--- |
 | `voz.sh` | Entrada dos hooks; repassa para o binário. Sem o binário compilado, responde aos agentes e avisa pelo `say`. |
 | `instalar.sh` | Instalador para macOS: dependências, compilação, hooks e `tmux.conf`. |
+| `scripts/instalar_hooks.py` | Registra os hooks de Claude, Antigravity e Codex, preservando outras integrações. |
 | `config.json` | Voz, modelo do resumo, frases dos avisos e narração. |
 | `fonetica.json` | Dicionário de pronúncia. |
 | `tmux.conf` | Configuração versionada do `tmux`. |
@@ -248,4 +273,5 @@ cd ~/.claude/voz && gh repo fork judhagsan/voz --remote=true --remote-name=origi
 | `src/keychain.rs` | Leitura segura e rotação sequencial de chaves no Keychain do macOS. |
 | `src/fonetica.rs` | Aplicação do dicionário de pronúncia. |
 | `src/agy.rs` | Decide se um comando do Antigravity espera aprovação manual. |
+| `src/codex.rs` | Mapeia eventos do Codex para resumo, permissão e espera. |
 | `src/painel.rs`, `src/cotas.rs`, `src/tela.rs` | Painel: repositórios, cotas dos agentes e desenho na tela. |
