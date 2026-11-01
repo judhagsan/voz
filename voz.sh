@@ -1,11 +1,17 @@
 #!/bin/bash
 # Entrada dos hooks: repassa tudo para o binário em Rust. Sem ele (antes da
-# compilação na instalação, por exemplo), responde o que o Antigravity espera e
+# compilação na instalação, por exemplo), responde o que os agentes esperam e
 # avisa pela voz do sistema, para o hook não ficar mudo nem travar o agente.
 
 BIN="$HOME/.claude/voz/target/release/voz"
 if [ -x "$BIN" ]; then
   exec "$BIN" "$@"
+fi
+
+if [ "${1:-}" = "--codex" ]; then
+  # Sem binário, preserva o protocolo; o resumo volta depois da compilação.
+  echo '{}'
+  exit 0
 fi
 
 if [ "$1" = "--agy" ]; then

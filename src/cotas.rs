@@ -1,15 +1,17 @@
 //! Cotas de uso dos agentes, lidas das próprias CLIs.
 //!
-//! O `claude -p /usage` e o `agy -p /quota` respondem em modo
-//! não interativo, sem turno de modelo e sem gastar cota. Os dois informam só
-//! o percentual de cada janela (5 h e semanal) e quando ela renova; nenhum
-//! expõe tokens restantes, então o painel não mostra tokens.
+//! O `claude -p /usage`, o `agy -p /quota` e a interface local do Codex
+//! respondem em modo não interativo, sem turno de modelo e sem gastar cota.
+//! Eles informam o percentual de cada janela (5 h e semanal) e quando ela
+//! renova; nenhum expõe tokens restantes, então o painel não mostra tokens.
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, TimeDelta, TimeZone};
 use regex::Regex;
 use std::fs;
-use std::path::Path;
-use std::process::{Command, Stdio};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -45,12 +47,16 @@ pub struct Grupo {
 pub struct Provedor {
     pub grupos: Vec<Grupo>,
     pub erro: Option<String>,
+    /// Instante do registro quando a leitura veio do histórico local.
+    pub historico_em: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cotas {
     pub claude: Provedor,
     pub antigravity: Provedor,
+    /// A assinatura do ChatGPT é a mesma usada pelo Codex.
+    pub chatgpt: Provedor,
     pub lido_em: i64,
 }
 
@@ -58,31 +64,43 @@ fn provedor_com_erro(erro: String) -> Provedor {
     Provedor {
         grupos: Vec::new(),
         erro: Some(erro),
+        historico_em: None,
     }
 }
 
-/// Roda a CLI com prazo; sem ele, uma CLI travada prenderia o painel.
-fn executar(programa: &str, args: &[&str], cwd: &Path) -> Result<String, String> {
+fn iniciar_comando(
+    programa: &str,
+    args: &[&str],
+    cwd: &Path,
+    interativo: bool,
+) -> Result<Child, String> {
     let home = std::env::var("HOME").unwrap_or_default();
     let candidatos = [
         programa.to_string(),
         format!("{home}/.local/bin/{programa}"),
     ];
-    let mut filho = None;
     for caminho in &candidatos {
         let tentativa = Command::new(caminho)
             .args(args)
             .current_dir(cwd)
-            .stdin(Stdio::null())
+            .stdin(if interativo {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn();
         if let Ok(f) = tentativa {
-            filho = Some(f);
-            break;
+            return Ok(f);
         }
     }
-    let mut filho = filho.ok_or_else(|| format!("{programa} não encontrado"))?;
+    Err(format!("{programa} não encontrado"))
+}
+
+/// Roda a CLI com prazo; sem ele, uma CLI travada prenderia o painel.
+fn executar(programa: &str, args: &[&str], cwd: &Path) -> Result<String, String> {
+    let mut filho = iniciar_comando(programa, args, cwd, false)?;
 
     let inicio = Instant::now();
     loop {
@@ -99,7 +117,17 @@ fn executar(programa: &str, args: &[&str], cwd: &Path) -> Result<String, String>
     }
     let saida = filho.wait_with_output().map_err(|e| e.to_string())?;
     if !saida.status.success() {
-        return Err(format!("{programa} falhou ({})", saida.status));
+        let stderr = String::from_utf8_lossy(&saida.stderr);
+        let detalhe = stderr
+            .lines()
+            .rev()
+            .find(|linha| !linha.trim().is_empty())
+            .map(str::trim)
+            .unwrap_or("");
+        if detalhe.is_empty() {
+            return Err(format!("{programa} falhou ({})", saida.status));
+        }
+        return Err(format!("{programa}: {detalhe}"));
     }
     Ok(String::from_utf8_lossy(&saida.stdout).into_owned())
 }
@@ -186,6 +214,7 @@ pub fn ler_claude(texto: &str, agora: DateTime<Local>) -> Provedor {
             janelas,
         }],
         erro: None,
+        historico_em: None,
     }
 }
 
@@ -244,7 +273,222 @@ pub fn ler_antigravity(json: &str) -> Provedor {
     }
     // O Argon tem cota própria e é o modelo principal; fica no topo.
     grupos.sort_by_key(|g| !g.nome.contains("Argon"));
-    Provedor { grupos, erro: None }
+    Provedor {
+        grupos,
+        erro: None,
+        historico_em: None,
+    }
+}
+
+fn rotulo_janela_chatgpt(minutos: Option<i64>, indice: usize) -> String {
+    match minutos {
+        Some(300) => "5h".to_string(),
+        Some(10_080) => "Semana".to_string(),
+        Some(m) if m >= 1_440 && m % 1_440 == 0 => {
+            let dias = m / 1_440;
+            if dias == 1 {
+                "1 dia".to_string()
+            } else {
+                format!("{dias} dias")
+            }
+        }
+        Some(m) if m > 0 && m % 60 == 0 => format!("{}h", m / 60),
+        Some(m) if m > 0 => format!("{m} min"),
+        Some(_) => "?".to_string(),
+        // As duas janelas históricas do Codex são 5 horas e semanal. O
+        // fallback mantém o painel útil mesmo se uma versão antiga omitir a duração.
+        None if indice == 0 => "5h".to_string(),
+        None => "Semana".to_string(),
+    }
+}
+
+fn grupo_chatgpt(quota: &serde_json::Value, nome: String) -> Option<Grupo> {
+    let mut janelas = Vec::new();
+    for (indice, campo) in ["primary", "secondary"].iter().enumerate() {
+        let Some(janela) = quota.get(campo) else {
+            continue;
+        };
+        let Some(usado) = janela
+            .get("usedPercent")
+            .or_else(|| janela.get("used_percent"))
+            .and_then(|u| u.as_f64())
+        else {
+            continue;
+        };
+        janelas.push(Janela {
+            rotulo: rotulo_janela_chatgpt(
+                janela
+                    .get("windowDurationMins")
+                    .or_else(|| janela.get("window_minutes"))
+                    .and_then(|m| m.as_i64()),
+                indice,
+            ),
+            usado: usado.round().clamp(0.0, 100.0) as u32,
+            // A interface do Codex entrega timestamp Unix em segundos.
+            renova: janela
+                .get("resetsAt")
+                .or_else(|| janela.get("resets_at"))
+                .and_then(|r| r.as_i64()),
+        });
+    }
+    if janelas.is_empty() {
+        return None;
+    }
+    janelas.sort_by_key(|j| j.rotulo != "5h");
+    Some(Grupo { nome, janelas })
+}
+
+/// Lê a resposta de `account/rateLimits/read` da CLI do Codex.
+///
+/// São os limites disponíveis ao Codex na conta ChatGPT conectada.
+pub fn ler_chatgpt(json: &str) -> Provedor {
+    let valor: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(_) => return provedor_com_erro("resposta do Codex inválida".to_string()),
+    };
+    // A CLI emite JSON-RPC, mas aceitar a resposta interna facilita o teste e
+    // tolera uma futura opção que entregue apenas o resultado.
+    let resultado = valor.get("result").unwrap_or(&valor);
+    if let Some(erro) = valor.pointer("/error/message").and_then(|e| e.as_str()) {
+        return provedor_com_erro(format!("Codex: {erro}"));
+    }
+    let mut grupos = Vec::new();
+    if let Some(por_limite) = resultado
+        .get("rateLimitsByLimitId")
+        .and_then(|limites| limites.as_object())
+    {
+        let mut limites: Vec<_> = por_limite.iter().collect();
+        limites.sort_by_key(|(id, _)| *id);
+        for (id, quota) in limites {
+            let nome = quota
+                .get("limitName")
+                .and_then(|n| n.as_str())
+                .map(String::from)
+                .unwrap_or_else(|| {
+                    if id == "codex" {
+                        "ChatGPT / Codex".to_string()
+                    } else {
+                        id.to_string()
+                    }
+                });
+            if let Some(grupo) = grupo_chatgpt(quota, nome) {
+                grupos.push(grupo);
+            }
+        }
+    }
+    if grupos.is_empty() {
+        if let Some(quota) = resultado
+            .get("rateLimits")
+            .or_else(|| resultado.get("rate_limits"))
+        {
+            if let Some(grupo) = grupo_chatgpt(quota, "ChatGPT / Codex".to_string()) {
+                grupos.push(grupo);
+            }
+        }
+    }
+    if grupos.is_empty() {
+        return provedor_com_erro("sem cotas na resposta do Codex".to_string());
+    }
+    if grupos.len() == 1 {
+        // O cabeçalho do card já identifica a cota compartilhada.
+        grupos[0].nome.clear();
+    }
+    Provedor {
+        grupos,
+        erro: None,
+        historico_em: None,
+    }
+}
+
+fn arquivos_jsonl(dir: &Path, encontrados: &mut Vec<PathBuf>) {
+    let Ok(itens) = fs::read_dir(dir) else {
+        return;
+    };
+    for item in itens.flatten() {
+        let caminho = item.path();
+        if caminho.is_dir() {
+            arquivos_jsonl(&caminho, encontrados);
+        } else if caminho.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+            encontrados.push(caminho);
+        }
+    }
+}
+
+/// Última cota que o Codex registrou numa sessão local.
+///
+/// É um fallback para quando a consulta ao app-server falha. Extrai somente
+/// cotas e datas dos eventos `token_count`; não guarda o conteúdo das conversas.
+fn ler_cota_do_historico_codex(sessoes: &Path) -> Option<Provedor> {
+    let mut arquivos = Vec::new();
+    arquivos_jsonl(sessoes, &mut arquivos);
+    arquivos.sort_by_key(|arquivo| {
+        arquivo
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+    });
+
+    let mut mais_recente: Option<Provedor> = None;
+    // Limita também os bytes lidos: uma sessão longa pode ter centenas de MB.
+    for arquivo in arquivos.iter().rev().take(12) {
+        let Ok(mut arquivo) = fs::File::open(arquivo) else {
+            continue;
+        };
+        let tamanho = arquivo.metadata().map(|m| m.len()).unwrap_or(0);
+        let inicio = tamanho.saturating_sub(2 * 1024 * 1024);
+        if arquivo.seek(SeekFrom::Start(inicio)).is_err() {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        if arquivo
+            .take(tamanho - inicio)
+            .read_to_end(&mut bytes)
+            .is_err()
+        {
+            continue;
+        }
+        // Descarta a primeira linha quando a leitura começa no meio do arquivo.
+        let bytes = if inicio > 0 {
+            let Some(nova_linha) = bytes.iter().position(|b| *b == b'\n') else {
+                continue;
+            };
+            &bytes[nova_linha + 1..]
+        } else {
+            &bytes[..]
+        };
+        let conteudo = String::from_utf8_lossy(bytes);
+        for linha in conteudo.lines().rev() {
+            let Some(provedor) = ler_evento_cota_codex(linha) else {
+                continue;
+            };
+            if mais_recente
+                .as_ref()
+                .is_none_or(|anterior| provedor.historico_em > anterior.historico_em)
+            {
+                mais_recente = Some(provedor);
+            }
+            break;
+        }
+    }
+    mais_recente
+}
+
+fn ler_evento_cota_codex(linha: &str) -> Option<Provedor> {
+    let evento: serde_json::Value = serde_json::from_str(linha).ok()?;
+    if evento.get("type")?.as_str()? != "event_msg"
+        || evento.pointer("/payload/type")?.as_str()? != "token_count"
+    {
+        return None;
+    }
+    let instante = DateTime::parse_from_rfc3339(evento.get("timestamp")?.as_str()?).ok()?;
+    let quota = evento.pointer("/payload/rate_limits")?;
+    // O registro guarda a cota diretamente, enquanto o parser espera o envelope.
+    let mut provedor = ler_chatgpt(&serde_json::json!({"rate_limits": quota}).to_string());
+    if provedor.erro.is_some() {
+        return None;
+    }
+    provedor.historico_em = Some(instante.timestamp());
+    Some(provedor)
 }
 
 fn buscar_claude(cwd: &Path) -> Provedor {
@@ -278,6 +522,93 @@ fn buscar_antigravity(cwd: &Path) -> Provedor {
     }
 }
 
+/// Mantém stdin aberto até a resposta e completa o handshake antes da consulta.
+/// Nenhuma thread/conversa ou turno de modelo é criado.
+fn consultar_cotas_codex(mut filho: Child, limite: Duration) -> Result<String, String> {
+    let (envio, respostas) = mpsc::channel();
+    let stdout = filho.stdout.take().expect("stdout redirecionado");
+    let leitor = thread::spawn(move || {
+        for linha in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Ok(valor) = serde_json::from_str::<serde_json::Value>(&linha) {
+                if envio.send(valor).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    let mut stderr = filho.stderr.take().expect("stderr redirecionado");
+    // Drena os logs para que um pipe cheio não trave o protocolo.
+    let erros = thread::spawn(move || std::io::copy(&mut stderr, &mut std::io::sink()));
+    let resultado = (|| {
+        let mut entrada = filho.stdin.take().ok_or("Codex sem entrada JSON-RPC")?;
+        let inicio = Instant::now();
+        let mut enviar = |mensagem: serde_json::Value| {
+            writeln!(entrada, "{mensagem}").map_err(|e| e.to_string())
+        };
+        let receber = |id: i64| -> Result<serde_json::Value, String> {
+            loop {
+                let restante = limite.saturating_sub(inicio.elapsed());
+                if restante.is_zero() {
+                    return Err("Codex não respondeu a tempo".to_string());
+                }
+                let resposta = respostas.recv_timeout(restante).map_err(|e| match e {
+                    mpsc::RecvTimeoutError::Timeout => "Codex não respondeu a tempo".to_string(),
+                    mpsc::RecvTimeoutError::Disconnected => {
+                        "Codex encerrou sem responder".to_string()
+                    }
+                })?;
+                if resposta.get("id").and_then(|v| v.as_i64()) == Some(id) {
+                    if let Some(erro) = resposta.get("error") {
+                        return Err(format!(
+                            "Codex: {}",
+                            erro.get("message")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("falha na consulta")
+                        ));
+                    }
+                    return Ok(resposta);
+                }
+            }
+        };
+        enviar(
+            serde_json::json!({"id": 1, "method": "initialize", "params": {
+                "clientInfo": {"name": "voz", "version": "0.2.0"}
+            }}),
+        )?;
+        receber(1)?;
+        enviar(serde_json::json!({"method": "initialized", "params": {}}))?;
+        enviar(serde_json::json!({"id": 2, "method": "account/rateLimits/read"}))?;
+        Ok(receber(2)?.to_string())
+    })();
+    // Encerra e recolhe apenas o processo de consulta, inclusive em caso de erro.
+    let _ = filho.kill();
+    let _ = filho.wait();
+    let _ = leitor.join();
+    let _ = erros.join();
+    resultado
+}
+
+fn buscar_chatgpt(cwd: &Path) -> Provedor {
+    let resultado_app =
+        match iniciar_comando("codex", &["app-server", "--listen", "stdio://"], cwd, true)
+            .and_then(|filho| consultar_cotas_codex(filho, LIMITE_COMANDO))
+        {
+            Ok(saida) => ler_chatgpt(&saida),
+            Err(e) => provedor_com_erro(e),
+        };
+    if resultado_app.erro.is_none() {
+        resultado_app
+    } else {
+        let home_codex = std::env::var_os("CODEX_HOME")
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".codex")));
+        home_codex
+            .and_then(|p| ler_cota_do_historico_codex(&p.join("sessions")))
+            .unwrap_or(resultado_app)
+    }
+}
+
 fn arquivo_cache(base: &Path) -> std::path::PathBuf {
     base.join("estado").join("cache-cotas.json")
 }
@@ -285,6 +616,7 @@ fn arquivo_cache(base: &Path) -> std::path::PathBuf {
 fn provedor_para_json(p: &Provedor) -> serde_json::Value {
     serde_json::json!({
         "erro": p.erro,
+        "historico_em": p.historico_em,
         "grupos": p.grupos.iter().map(|g| serde_json::json!({
             "nome": g.nome,
             "janelas": g.janelas.iter().map(|j| serde_json::json!({
@@ -315,6 +647,7 @@ fn provedor_de_json(v: &serde_json::Value) -> Option<Provedor> {
     Some(Provedor {
         grupos,
         erro: v.get("erro").and_then(|e| e.as_str()).map(String::from),
+        historico_em: v.get("historico_em").and_then(|v| v.as_i64()),
     })
 }
 
@@ -323,6 +656,7 @@ fn salvar_cache(base: &Path, cotas: &Cotas) {
         "lido_em": cotas.lido_em,
         "claude": provedor_para_json(&cotas.claude),
         "antigravity": provedor_para_json(&cotas.antigravity),
+        "chatgpt": provedor_para_json(&cotas.chatgpt),
     });
     if let Ok(texto) = serde_json::to_string_pretty(&valor) {
         let _ = fs::create_dir_all(base.join("estado"));
@@ -338,30 +672,38 @@ pub fn ler_cache(base: &Path) -> Option<Cotas> {
         lido_em: v.get("lido_em")?.as_i64()?,
         claude: provedor_de_json(v.get("claude")?)?,
         antigravity: provedor_de_json(v.get("antigravity")?)?,
+        chatgpt: provedor_de_json(v.get("chatgpt")?)?,
     })
 }
 
 pub fn fresca(cotas: &Cotas) -> bool {
-    Local::now().timestamp() - cotas.lido_em < VALIDADE_SEG
+    cotas.claude.erro.is_none()
+        && cotas.antigravity.erro.is_none()
+        && cotas.chatgpt.erro.is_none()
+        && Local::now().timestamp() - cotas.lido_em < VALIDADE_SEG
 }
 
-/// Consulta as duas CLIs em paralelo e grava o resultado.
+/// Consulta as três CLIs em paralelo e grava o resultado.
 pub fn atualizar(base: &Path) -> Cotas {
     let cwd = base.join("estado");
     let _ = fs::create_dir_all(&cwd);
-    let (claude, antigravity) = thread::scope(|s| {
+    let (claude, antigravity, chatgpt) = thread::scope(|s| {
         let c = s.spawn(|| buscar_claude(&cwd));
         let a = s.spawn(|| buscar_antigravity(&cwd));
+        let g = s.spawn(|| buscar_chatgpt(&cwd));
         (
             c.join()
                 .unwrap_or_else(|_| provedor_com_erro("falha interna".to_string())),
             a.join()
+                .unwrap_or_else(|_| provedor_com_erro("falha interna".to_string())),
+            g.join()
                 .unwrap_or_else(|_| provedor_com_erro("falha interna".to_string())),
         )
     });
     let cotas = Cotas {
         claude,
         antigravity,
+        chatgpt,
         lido_em: Local::now().timestamp(),
     };
     salvar_cache(base, &cotas);
@@ -428,6 +770,15 @@ fn linhas_provedor(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
         return vec![linha(&format!("  {FRACO}{curto}{RESET}"))];
     }
     let mut linhas = Vec::new();
+    if let Some(instante) = p
+        .historico_em
+        .and_then(|t| Local.timestamp_opt(t, 0).single())
+    {
+        linhas.push(linha(&format!(
+            "{FRACO}Histórico de {}{RESET}",
+            instante.format("%d/%m %H:%M")
+        )));
+    }
     for g in &p.grupos {
         if !g.nome.is_empty() {
             linhas.push(linha(&g.nome));
@@ -460,6 +811,9 @@ pub fn renderizar_card(cotas: Option<&Cotas>, agora: DateTime<Local>) -> Vec<Str
             linhas.push(format!("├─{}─┤", "─".repeat(LARGURA_CARD)));
             linhas.push(cabecalho("Antigravity", AZUL, "% usado"));
             linhas.extend(linhas_provedor(&c.antigravity, agora));
+            linhas.push(format!("├─{}─┤", "─".repeat(LARGURA_CARD)));
+            linhas.push(cabecalho("ChatGPT / Codex", VERDE, "% usado"));
+            linhas.extend(linhas_provedor(&c.chatgpt, agora));
             let lido = Local
                 .timestamp_opt(c.lido_em, 0)
                 .single()
@@ -502,6 +856,10 @@ What's contributing to your usage?";
             {"window":"5h","remaining_fraction":0,"reset_time":"2026-10-29T07:29:08Z"}]},
         {"name":"Gemini 4 Argon","description":"For paid Pro plans, Argon quota is separate.","buckets":[
             {"window":"weekly","remaining_fraction":0,"reset_time":"2026-11-04T16:36:14Z"}]}]}}}"#;
+
+    const CHATGPT: &str = r#"{"jsonrpc":"2.0","id":2,"result":{"rateLimits":{"primary":{"usedPercent":42,"windowDurationMins":300,"resetsAt":1793261400},"secondary":{"usedPercent":71,"windowDurationMins":10080,"resetsAt":1793628000}},"rateLimitsByLimitId":{"codex":{"primary":{"usedPercent":42,"windowDurationMins":300,"resetsAt":1793261400},"secondary":{"usedPercent":71,"windowDurationMins":10080,"resetsAt":1793628000}}}}}"#;
+
+    const CHATGPT_HISTORICO: &str = r#"{"rate_limits":{"primary":{"used_percent":52.0,"window_minutes":43200,"resets_at":1796145972},"secondary":null}}"#;
 
     #[test]
     fn test_ler_claude_le_percentual_usado() {
@@ -582,11 +940,154 @@ What's contributing to your usage?";
     }
 
     #[test]
+    fn test_ler_chatgpt_le_cota_compartilhada_com_codex() {
+        let p = ler_chatgpt(CHATGPT);
+        assert_eq!(p.erro, None);
+        assert_eq!(p.grupos.len(), 1);
+        assert!(p.grupos[0].nome.is_empty());
+        let j = &p.grupos[0].janelas;
+        assert_eq!((j[0].rotulo.as_str(), j[0].usado), ("5h", 42));
+        assert_eq!(j[0].renova, Some(1_793_261_400));
+        assert_eq!((j[1].rotulo.as_str(), j[1].usado), ("Semana", 71));
+        assert_eq!(j[1].renova, Some(1_793_628_000));
+    }
+
+    #[test]
+    fn test_ler_chatgpt_sem_secundaria() {
+        let p =
+            ler_chatgpt(r#"{"rateLimits":{"primary":{"usedPercent":4,"windowDurationMins":300}}}"#);
+        assert_eq!(p.erro, None);
+        assert_eq!(p.grupos[0].janelas.len(), 1);
+        assert_eq!(p.grupos[0].janelas[0].rotulo, "5h");
+    }
+
+    #[test]
+    fn test_ler_chatgpt_aceita_registro_local_do_codex() {
+        let p = ler_chatgpt(CHATGPT_HISTORICO);
+        assert_eq!(p.erro, None);
+        let j = &p.grupos[0].janelas;
+        assert_eq!(j.len(), 1);
+        assert_eq!((j[0].rotulo.as_str(), j[0].usado), ("30 dias", 52));
+        assert_eq!(j[0].renova, Some(1_796_145_972));
+    }
+
+    fn evento_cota(instante: &str, usado: u32) -> String {
+        serde_json::json!({
+            "type": "event_msg", "timestamp": instante,
+            "payload": {"type": "token_count", "info": {"total_token_usage": {}},
+                "rate_limits": {"primary": {"used_percent": usado, "window_minutes": 300}}}
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn test_historico_le_envelope_real_e_preserva_data() {
+        let p = ler_evento_cota_codex(&evento_cota("2026-11-01T17:46:21.437Z", 13)).unwrap();
+        assert_eq!(p.grupos[0].janelas[0].usado, 13);
+        assert_eq!(p.historico_em, Some(1_793_555_181));
+        assert_eq!(provedor_de_json(&provedor_para_json(&p)), Some(p.clone()));
+        let linhas = linhas_provedor(&p, em(2026, 11, 1, 15, 0));
+        assert!(linhas[0].contains("Histórico de"));
+        assert!(linhas
+            .iter()
+            .all(|l| largura_visivel(l) == LARGURA_CARD + 4));
+    }
+
+    #[test]
+    fn test_historico_ignora_eventos_sem_cota_ou_com_outro_tipo() {
+        assert!(ler_evento_cota_codex("{incompleto").is_none());
+        let mut evento: serde_json::Value =
+            serde_json::from_str(&evento_cota("2026-11-01T17:46:21Z", 13)).unwrap();
+        evento["payload"]["type"] = serde_json::json!("agent_message");
+        assert!(ler_evento_cota_codex(&evento.to_string()).is_none());
+        evento["payload"]["type"] = serde_json::json!("token_count");
+        evento["payload"]["rate_limits"] = serde_json::Value::Null;
+        assert!(ler_evento_cota_codex(&evento.to_string()).is_none());
+    }
+
+    #[test]
+    fn test_historico_escolhe_data_do_evento_em_qualquer_projeto() {
+        let pasta = std::env::temp_dir().join(format!("voz-historico-{}", std::process::id()));
+        fs::create_dir_all(pasta.join("2026/11/01")).unwrap();
+        fs::write(
+            pasta.join("2026/11/01/atual.jsonl"),
+            format!("{}\n{{parcial", evento_cota("2026-11-01T17:46:21Z", 13)),
+        )
+        .unwrap();
+        fs::write(
+            pasta.join("antiga.jsonl"),
+            evento_cota("2026-11-01T17:40:00Z", 1),
+        )
+        .unwrap();
+        let p = ler_cota_do_historico_codex(&pasta).unwrap();
+        assert_eq!(p.grupos[0].janelas[0].usado, 13);
+        fs::remove_dir_all(pasta).unwrap();
+    }
+
+    fn servidor_falso(script: &str, limite: Duration) -> Result<String, String> {
+        let filho = iniciar_comando(
+            "/usr/bin/python3",
+            &["-u", "-c", script],
+            &std::env::temp_dir(),
+            true,
+        )
+        .unwrap();
+        consultar_cotas_codex(filho, limite)
+    }
+
+    #[test]
+    fn test_codex_aguarda_handshake_e_resposta_sem_fechar_stdin() {
+        let resposta = servidor_falso(r#"
+import json, sys, time
+assert json.loads(sys.stdin.readline())['method'] == 'initialize'
+time.sleep(0.05)
+print(json.dumps({'id': 1, 'result': {}}))
+assert json.loads(sys.stdin.readline())['method'] == 'initialized'
+assert json.loads(sys.stdin.readline())['method'] == 'account/rateLimits/read'
+print(json.dumps({'method': 'account/updated', 'params': {}}))
+time.sleep(0.05)
+print(json.dumps({'id': 2, 'result': {'rateLimits': {'primary': {'usedPercent': 13, 'windowDurationMins': 300}}}}))
+sys.stdin.read()
+"#, Duration::from_secs(5)).unwrap();
+        assert_eq!(ler_chatgpt(&resposta).grupos[0].janelas[0].usado, 13);
+    }
+
+    #[test]
+    fn test_codex_preserva_erro_json_rpc() {
+        let erro = servidor_falso(
+            r#"
+import json, sys
+json.loads(sys.stdin.readline())
+print(json.dumps({'id': 1, 'error': {'code': -1, 'message': 'login necessário'}}))
+sys.stdin.read()
+"#,
+            Duration::from_secs(5),
+        )
+        .unwrap_err();
+        assert!(erro.contains("login necessário"));
+    }
+
+    #[test]
+    fn test_codex_tem_prazo_e_trata_saida_sem_resposta() {
+        let inicio = Instant::now();
+        assert!(
+            servidor_falso("import time; time.sleep(10)", Duration::from_millis(100))
+                .unwrap_err()
+                .contains("a tempo")
+        );
+        assert!(inicio.elapsed() < Duration::from_secs(3));
+        assert!(servidor_falso("pass", Duration::from_secs(5))
+            .unwrap_err()
+            .contains("sem responder"));
+    }
+
+    #[test]
     fn test_cache_ida_e_volta() {
         let pasta = std::env::temp_dir().join(format!("voz-cotas-{}", std::process::id()));
         let cotas = Cotas {
             claude: ler_claude(USAGE, em(2026, 10, 29, 4, 20)),
             antigravity: ler_antigravity(QUOTA),
+            chatgpt: ler_chatgpt(CHATGPT),
             lido_em: 1_790_000_000,
         };
         salvar_cache(&pasta, &cotas);
@@ -616,6 +1117,17 @@ What's contributing to your usage?";
     }
 
     #[test]
+    fn test_cota_com_erro_nao_fica_no_cache() {
+        let cotas = Cotas {
+            claude: provedor_com_erro("indisponível".to_string()),
+            antigravity: ler_antigravity(QUOTA),
+            chatgpt: ler_chatgpt(CHATGPT),
+            lido_em: Local::now().timestamp(),
+        };
+        assert!(!fresca(&cotas));
+    }
+
+    #[test]
     fn test_formatar_renovacao() {
         let agora = em(2026, 10, 29, 4, 20);
         let hoje = em(2026, 10, 29, 6, 10).timestamp();
@@ -632,6 +1144,7 @@ What's contributing to your usage?";
         let cotas = Cotas {
             claude: ler_claude(USAGE, agora),
             antigravity: provedor_com_erro("agy não encontrado".to_string()),
+            chatgpt: ler_chatgpt(CHATGPT),
             lido_em: agora.timestamp(),
         };
         for card in [

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::transcript::{extrair_resumo_direto, ultimo_turno};
+use crate::transcript::{extrair_resumo_direto, turno_codex};
 
 pub fn nome_do_projeto(cwd: Option<&Path>) -> String {
     let dir = match cwd {
@@ -66,6 +66,31 @@ pub fn montar_fala(base: &Path, projeto: &str, pedido: &str, resposta: &str) -> 
     }
 }
 
+fn dados_do_turno(
+    val: &serde_json::Value,
+    transcript_override: Option<&Path>,
+) -> (Option<f64>, String, Option<String>) {
+    let transcript = transcript_override.map(PathBuf::from).or_else(|| {
+        val.get("transcript_path")
+            .or_else(|| val.get("transcriptPath"))
+            .and_then(|t| t.as_str())
+            .map(PathBuf::from)
+    });
+    let (inicio, pedido, resposta) = transcript
+        .as_deref()
+        .map(|p| turno_codex(p, val.get("turn_id").and_then(|t| t.as_str())))
+        .unwrap_or_default();
+    // O Stop do Codex traz a resposta estável no próprio evento; a narração
+    // continua funcionando quando o transcript ainda não foi gravado.
+    let resposta = val
+        .get("last_assistant_message")
+        .and_then(|r| r.as_str())
+        .filter(|r| !r.trim().is_empty())
+        .map(String::from)
+        .or(resposta);
+    (inicio, pedido, resposta)
+}
+
 pub fn tentar_narrar(
     base: &Path,
     entrada_json: &str,
@@ -100,20 +125,6 @@ pub fn tentar_narrar(
     let val: serde_json::Value =
         serde_json::from_str(entrada_json).unwrap_or(serde_json::Value::Null);
 
-    let transcript_str = transcript_override
-        .map(|p| p.to_string_lossy().to_string())
-        .or_else(|| {
-            val.get("transcript_path")
-                .or_else(|| val.get("transcriptPath"))
-                .and_then(|t| t.as_str())
-                .map(|s| s.to_string())
-        });
-
-    let transcript_path = match transcript_str {
-        Some(t) if Path::new(&t).is_file() => PathBuf::from(t),
-        _ => return false,
-    };
-
     let cwd_path = cwd_override.map(PathBuf::from).or_else(|| {
         val.get("cwd")
             .and_then(|c| c.as_str())
@@ -127,7 +138,7 @@ pub fn tentar_narrar(
             })
     });
 
-    let (inicio, pedido, final_resp) = ultimo_turno(&transcript_path);
+    let (inicio, pedido, resposta) = dados_do_turno(&val, transcript_override);
 
     if min_segundos > 0.0 {
         if let Some(ini) = inicio {
@@ -140,12 +151,6 @@ pub fn tentar_narrar(
             }
         }
     }
-
-    let resposta = val
-        .get("last_assistant_message")
-        .and_then(|r| r.as_str())
-        .map(|s| s.to_string())
-        .or(final_resp);
 
     let resposta_texto = match resposta {
         Some(r) if !r.trim().is_empty() => r,
@@ -160,4 +165,31 @@ pub fn tentar_narrar(
 
     crate::fala::falar(base, &fala, 40);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_narra_resposta_do_hook_sem_transcript() {
+        for caminho in [
+            serde_json::Value::Null,
+            serde_json::json!("/nao-existe-voz.jsonl"),
+        ] {
+            let (inicio, pedido, resposta) = dados_do_turno(
+                &serde_json::json!({
+                    "transcript_path": caminho,
+                    "last_assistant_message": "Concluí a integração com o Codex."
+                }),
+                None,
+            );
+            assert_eq!(inicio, None);
+            assert!(pedido.is_empty());
+            assert_eq!(
+                resposta.as_deref(),
+                Some("Concluí a integração com o Codex.")
+            );
+        }
+    }
 }

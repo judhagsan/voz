@@ -1,5 +1,6 @@
 mod agy;
 mod audio;
+mod codex;
 mod cotas;
 mod elevenlabs;
 mod fala;
@@ -54,6 +55,21 @@ fn disparar_desacoplado(categoria: &str, entrada: &str) {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let base = caminho_base();
+
+    if args.get(1).map(String::as_str) == Some("--codex") {
+        let entrada = ler_stdin();
+        if std::env::var("VOZ_GERANDO").is_err() {
+            if let Ok(valor) = serde_json::from_str(&entrada) {
+                if let Some(categoria) = codex::categoria(&valor) {
+                    processar_aviso(&base, categoria, &entrada);
+                }
+            }
+        }
+        // O hook é assíncrono no Codex. Stdout contém somente JSON neutro:
+        // a fala não aprova ferramentas, não bloqueia nem prolonga o turno.
+        println!("{{}}");
+        return;
+    }
 
     if args.len() > 1 && args[1] == "--agy" {
         let categoria = args.get(2).map(|s| s.as_str()).unwrap_or("");
@@ -172,12 +188,15 @@ fn main() {
     }
 
     let entrada = ler_stdin();
+    processar_aviso(&base, categoria, &entrada);
+}
 
-    if categoria == "terminei" && narrar::tentar_narrar(&base, &entrada, None, None) {
+fn processar_aviso(base: &Path, categoria: &str, entrada: &str) {
+    if categoria == "terminei" && narrar::tentar_narrar(base, entrada, None, None) {
         return;
     }
 
-    if let Some(frase) = fala::sortear_frase(&base, categoria) {
-        fala::falar(&base, &frase, 30);
+    if let Some(frase) = fala::sortear_frase(base, categoria) {
+        fala::falar(base, &frase, 30);
     }
 }
