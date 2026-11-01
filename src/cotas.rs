@@ -74,7 +74,9 @@ fn iniciar_comando(
     cwd: &Path,
     interativo: bool,
 ) -> Result<Child, String> {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::platform::pasta_usuario()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
     let candidatos = [
         programa.to_string(),
         format!("{home}/.local/bin/{programa}"),
@@ -602,7 +604,7 @@ fn buscar_chatgpt(cwd: &Path) -> Provedor {
         let home_codex = std::env::var_os("CODEX_HOME")
             .filter(|p| !p.is_empty())
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".codex")));
+            .or_else(|| crate::platform::pasta_usuario().map(|p| p.join(".codex")));
         home_codex
             .and_then(|p| ler_cota_do_historico_codex(&p.join("sessions")))
             .unwrap_or(resultado_app)

@@ -6,3 +6,4 @@ narracoes/
 narracoes.tsv
 __pycache__/
 .DS_Store
+trava-fala.lock

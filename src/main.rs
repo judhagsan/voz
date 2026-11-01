@@ -10,6 +10,7 @@ mod keychain;
 mod narrar;
 mod openai;
 mod painel;
+mod platform;
 mod resumo;
 mod tela;
 mod transcript;
@@ -46,8 +47,7 @@ fn caminho_base() -> PathBuf {
         }
     }
 
-    if let Ok(home) = std::env::var("HOME") {
-        let home_path = PathBuf::from(home);
+    if let Some(home_path) = platform::pasta_usuario() {
         for candidata in [home_path.join("voz"), home_path.join(".config").join("voz")] {
             if candidata.join("config.json").exists() {
                 return candidata;

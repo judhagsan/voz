@@ -1,11 +1,10 @@
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
 
 pub fn comando_autorizado_agy(cmd: &str) -> bool {
-    let home = match std::env::var("HOME") {
-        Ok(h) => PathBuf::from(h),
-        Err(_) => return false,
+    let home = match crate::platform::pasta_usuario() {
+        Some(h) => h,
+        None => return false,
     };
     let cfg_path = home
         .join(".gemini")

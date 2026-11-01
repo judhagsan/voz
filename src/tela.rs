@@ -9,25 +9,7 @@ use crate::painel::{largura_visivel, RESET};
 
 /// Colunas e linhas do terminal; None quando a saída não é um terminal.
 pub fn tamanho() -> Option<(usize, usize)> {
-    let mut ws = libc::winsize {
-        ws_row: 0,
-        ws_col: 0,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    // SAFETY: TIOCGWINSZ só preenche a struct winsize apontada.
-    let ok = unsafe {
-        libc::ioctl(
-            libc::STDOUT_FILENO,
-            libc::TIOCGWINSZ,
-            &mut ws as *mut libc::winsize,
-        )
-    } == 0;
-    if ok && ws.ws_col > 0 && ws.ws_row > 0 {
-        Some((ws.ws_col as usize, ws.ws_row as usize))
-    } else {
-        None
-    }
+    crate::platform::tamanho_terminal()
 }
 
 /// Corta a linha em `largura` colunas visíveis sem partir as sequências de cor.
@@ -101,30 +83,9 @@ pub fn ajustar(quadro: &str, tamanho: Option<(usize, usize)>) -> String {
         .join("\n")
 }
 
-extern "C" fn restaurar_e_sair(sinal: libc::c_int) {
-    const SEQUENCIA: &[u8] = b"\x1b[0m\x1b[?25h\n";
-    // SAFETY: write e _exit são seguras dentro de um tratador de sinal.
-    unsafe {
-        libc::write(
-            libc::STDOUT_FILENO,
-            SEQUENCIA.as_ptr().cast(),
-            SEQUENCIA.len(),
-        );
-        libc::_exit(128 + sinal);
-    }
-}
-
 /// Esconde o cursor e garante que ele volte quando o painel for fechado.
 pub fn esconder_cursor_ate_sair() {
-    for sinal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-        // SAFETY: o tratador só chama funções seguras para sinais.
-        unsafe {
-            libc::signal(
-                sinal,
-                restaurar_e_sair as extern "C" fn(libc::c_int) as libc::sighandler_t,
-            );
-        }
-    }
+    crate::platform::instalar_tratamento_sinais();
     print!("\x1b[?25l");
 }
 
