@@ -41,6 +41,23 @@ def salvar(caminho, dados):
             temporario.unlink(missing_ok=True)
 
 
+def eh_comando_voz(cmd_existente, cmd_novo):
+    if cmd_existente == cmd_novo:
+        return True
+    try:
+        partes_antigas = shlex.split(cmd_existente)
+        partes_novas = shlex.split(cmd_novo)
+    except ValueError:
+        return False
+    if not partes_antigas or not partes_novas:
+        return False
+    prog_antigo = Path(partes_antigas[0]).name
+    prog_novo = Path(partes_novas[0]).name
+    if prog_antigo == "voz.sh" and prog_novo == "voz.sh":
+        return partes_antigas[1:] == partes_novas[1:]
+    return False
+
+
 def garantir_hook(lista, comando, matcher=None, timeout=600):
     # Acrescenta ao fim para preservar também os índices dos hooks confiados
     # pelo Codex. Só atualiza o handler que corresponde ao comando do Voz.
@@ -48,8 +65,8 @@ def garantir_hook(lista, comando, matcher=None, timeout=600):
         if grupo.get("matcher") != matcher:
             continue
         for hook in grupo.get("hooks", []):
-            if hook.get("command") == comando:
-                hook.update(type="command", **{"async": True, "timeout": timeout})
+            if eh_comando_voz(hook.get("command", ""), comando):
+                hook.update(type="command", command=comando, **{"async": True, "timeout": timeout})
                 return
     grupo = {"hooks": [{"type": "command", "command": comando, "async": True, "timeout": timeout}]}
     if matcher is not None:

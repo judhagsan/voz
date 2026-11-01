@@ -72,10 +72,12 @@ Chaves de API são opcionais: sem nenhuma configurada, a voz neural local do mac
 curl -fsSL https://raw.githubusercontent.com/judhagsan/voz/main/instalar.sh | bash
 ```
 
-Ou, com o repositório já clonado:
+Ao rodar via `curl`, o instalador pergunta onde você deseja colocar o repositório (por padrão `~/voz`, junto dos seus outros repositórios, ou em `~/.config/voz`).
+
+Ou, com o repositório já clonado na pasta de sua preferência (ex: `~/voz`):
 
 ```zsh
-chmod +x ~/.claude/voz/instalar.sh && ~/.claude/voz/instalar.sh
+chmod +x ~/voz/instalar.sh && ~/voz/instalar.sh
 ```
 
 O instalador compila o `voz`, cria o atalho em `~/.local/bin/voz`, registra os hooks nos agentes (rodar de novo só atualiza, sem duplicar), vincula o `tmux.conf` e verifica as chaves salvas no Keychain. Se encontrar restos de uma versão antiga do Voz (o motor de voz em Python, o ambiente `.venv` e o gancho de pre-commit que ela criava), ele os remove. Depois, recarregue o shell:
@@ -101,7 +103,7 @@ Todos rodam em segundo plano e devolvem apenas `{}` ao Codex. O Voz usa a mesma 
 Se o Voz já estiver compilado, registre somente a integração do Codex com:
 
 ```zsh
-python3 ~/.claude/voz/scripts/instalar_hooks.py --agente codex
+python3 ~/voz/scripts/instalar_hooks.py --agente codex
 ```
 
 O script guarda uma cópia inicial em `hooks.json.voz.bak`. Se o JSON existente estiver inválido, interrompe a instalação sem substituir o arquivo.
@@ -246,7 +248,7 @@ O repositório principal aceita `push` apenas do dono. Para manter suas própria
 
 ```zsh
 gh auth login
-cd ~/.claude/voz && gh repo fork judhagsan/voz --remote=true --remote-name=origin
+cd ~/voz && gh repo fork judhagsan/voz --remote=true --remote-name=origin
 ```
 
 ---

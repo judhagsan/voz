@@ -3,9 +3,14 @@
 # compilação na instalação, por exemplo), responde o que os agentes esperam e
 # avisa pela voz do sistema, para o hook não ficar mudo nem travar o agente.
 
-BIN="$HOME/.claude/voz/target/release/voz"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN="$DIR/target/release/voz"
 if [ -x "$BIN" ]; then
   exec "$BIN" "$@"
+fi
+
+if command -v voz >/dev/null 2>&1; then
+  exec voz "$@"
 fi
 
 if [ "${1:-}" = "--codex" ]; then

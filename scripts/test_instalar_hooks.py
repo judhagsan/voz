@@ -24,6 +24,11 @@ class InstalacaoHooksTest(unittest.TestCase):
             hook = dados["hooks"][evento][-1]["hooks"][0]
             self.assertEqual(shlex.split(hook["command"]), ["/pasta com espaços/voz.sh", "--codex"])
             self.assertTrue(hook["async"])
+        # Ao mudar o caminho do repositório, atualiza o comando existente sem criar duplicatas
+        configurar_codex(dados, Path("/novo/caminho/voz.sh"))
+        self.assertEqual(len(dados["hooks"]["Stop"]), 2)
+        hook_atualizado = dados["hooks"]["Stop"][-1]["hooks"][0]
+        self.assertEqual(shlex.split(hook_atualizado["command"]), ["/novo/caminho/voz.sh", "--codex"])
 
     def test_salvar_faz_backup_uma_vez_e_instalacao_repetida_nao_reescreve(self):
         with tempfile.TemporaryDirectory() as pasta:
