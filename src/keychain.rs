@@ -1,18 +1,8 @@
-//! Acesso ao Keychain do macOS para leitura de chaves de API.
+//! Leitura segura de chaves de API do sistema operacional.
 //! Suporta chaves sequenciais para rotação automática (ex: chave, chave-2, chave-3).
 
-use std::process::Command;
-
 pub fn ler_chave(servico: &str) -> Result<String, String> {
-    let saida = Command::new("security")
-        .args(["find-generic-password", "-s", servico, "-w"])
-        .output()
-        .map_err(|e| e.to_string())?;
-    let chave = String::from_utf8_lossy(&saida.stdout).trim().to_string();
-    if chave.is_empty() {
-        return Err(format!("sem chave no Keychain ({servico})"));
-    }
-    Ok(chave)
+    crate::platform::ler_segredo(servico)
 }
 
 /// Devolve a lista de todas as chaves cadastradas para o serviço base.

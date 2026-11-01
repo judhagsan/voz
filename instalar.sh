@@ -40,42 +40,61 @@ fi
 
 echo "==> Instalando Voz em $DESTINO..."
 
-if ! command -v brew >/dev/null 2>&1 && [ -x /opt/homebrew/bin/brew ]; then
-  eval "$(/opt/homebrew/bin/brew shellenv)"
-fi
-
-if ! command -v brew >/dev/null 2>&1; then
-  echo "ERRO: Homebrew não encontrado."
-  echo "Instale o Homebrew (https://brew.sh) e rode o instalador novamente."
-  exit 1
-fi
-
-echo "==> Verificando e atualizando dependências para as versões mais recentes (tmux, gh)..."
-brew update --quiet || true
-
-for pacote in tmux gh; do
-  if ! brew list --formula "$pacote" >/dev/null 2>&1; then
-    echo "==> Instalando $pacote (versão mais recente)..."
-    brew install "$pacote"
-  elif [ -n "$(brew outdated --formula "$pacote" 2>/dev/null)" ]; then
-    echo "==> Atualizando $pacote para a versão mais recente..."
-    brew upgrade "$pacote"
-  else
-    echo "==> $pacote já está na versão mais recente."
+SO="$(uname -s)"
+if [ "$SO" = "Darwin" ]; then
+  if ! command -v brew >/dev/null 2>&1 && [ -x /opt/homebrew/bin/brew ]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)"
   fi
-done
 
-# O cargo precisa do linker das Command Line Tools da Apple.
-if ! xcode-select -p >/dev/null 2>&1; then
-  echo "ERRO: faltam as Command Line Tools da Apple."
-  echo "Rode 'xcode-select --install' e depois o instalador de novo."
-  exit 1
-fi
+  if ! command -v brew >/dev/null 2>&1; then
+    echo "ERRO: Homebrew não encontrado."
+    echo "Instale o Homebrew (https://brew.sh) e rode o instalador novamente."
+    exit 1
+  fi
 
-# O binário é compilado com o cargo; sem Rust instalado, vem pelo Homebrew.
-if ! command -v cargo >/dev/null 2>&1; then
-  echo "==> Instalando Rust (cargo)..."
-  brew install rust
+  echo "==> Verificando e atualizando dependências para as versões mais recentes (tmux, gh)..."
+  brew update --quiet || true
+
+  for pacote in tmux gh; do
+    if ! brew list --formula "$pacote" >/dev/null 2>&1; then
+      echo "==> Instalando $pacote (versão mais recente)..."
+      brew install "$pacote"
+    elif [ -n "$(brew outdated --formula "$pacote" 2>/dev/null)" ]; then
+      echo "==> Atualizando $pacote para a versão mais recente..."
+      brew upgrade "$pacote"
+    else
+      echo "==> $pacote já está na versão mais recente."
+    fi
+  done
+
+  # O cargo precisa do linker das Command Line Tools da Apple.
+  if ! xcode-select -p >/dev/null 2>&1; then
+    echo "ERRO: faltam as Command Line Tools da Apple."
+    echo "Rode 'xcode-select --install' e depois o instalador de novo."
+    exit 1
+  fi
+
+  # O binário é compilado com o cargo; sem Rust instalado, vem pelo Homebrew.
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "==> Instalando Rust (cargo)..."
+    brew install rust
+  fi
+elif [ "$SO" = "Linux" ]; then
+  echo "==> Verificando dependências no Linux..."
+  if command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update -qq || true
+    sudo apt-get install -y -qq tmux gh libasound2-dev build-essential speech-dispatcher || true
+  elif command -v dnf >/dev/null 2>&1; then
+    sudo dnf install -y tmux gh alsa-lib-devel gcc speech-dispatcher || true
+  elif command -v pacman >/dev/null 2>&1; then
+    sudo pacman -Sy --noconfirm tmux github-cli alsa-lib base-devel speech-dispatcher || true
+  fi
+
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "==> Rust não encontrado. Instalando via rustup..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    source "$HOME/.cargo/env" 2>/dev/null || true
+  fi
 fi
 
 mkdir -p "$BIN_DIR"

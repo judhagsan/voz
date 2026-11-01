@@ -3,8 +3,6 @@
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
-use std::fs::{self, OpenOptions};
-use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
@@ -16,45 +14,47 @@ use std::time::Duration;
 const TAXA_ORIGEM: f64 = 24_000.0;
 
 /// Roda `reproduzir` segurando a trava global de reprodução.
-fn com_trava(base: &Path, reproduzir: impl FnOnce()) {
-    let estado = base.join("estado");
-    fs::create_dir_all(&estado).ok();
-    match OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(estado.join("reproducao.lock"))
-    {
-        Ok(trava) => {
-            // SAFETY: flock só usa o descritor, válido enquanto `trava` existir;
-            // a trava cai quando o arquivo é fechado no fim do bloco.
-            unsafe { libc::flock(trava.as_raw_fd(), libc::LOCK_EX) };
-            reproduzir();
-        }
-        Err(_) => reproduzir(),
-    }
+fn com_trava<F, R>(base: &Path, reproduzir: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    crate::platform::com_trava(base, reproduzir)
 }
 
 pub fn tocar(base: &Path, arquivo: &Path) {
     com_trava(base, || {
+        #[cfg(target_os = "macos")]
         let _ = Command::new("afplay").arg(arquivo).status();
+        #[cfg(target_os = "linux")]
+        {
+            let _ = Command::new("pw-play")
+                .arg(arquivo)
+                .status()
+                .or_else(|_| Command::new("paplay").arg(arquivo).status())
+                .or_else(|_| Command::new("aplay").arg(arquivo).status());
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let script = format!(
+                "(New-Object Media.SoundPlayer '{}').PlaySync()",
+                arquivo.display()
+            );
+            let _ = Command::new("powershell")
+                .args(["-NoProfile", "-Command", &script])
+                .status();
+        }
     });
 }
 
-/// Voz de reserva do macOS, para quando nenhuma API de IA responde.
-/// Usa a voz neural nativa da Siri (Voz 2) do macOS 27.
+/// Voz de reserva do sistema, para quando nenhuma API de IA responde.
 pub fn dizer(base: &Path, texto: &str) {
     let voz_reserva = crate::fala::ler_config(base)
         .pointer("/reserva/voz")
         .and_then(|v| v.as_str())
-        .unwrap_or("Voz 2")
+        .unwrap_or(crate::platform::VOZ_RESERVA_PADRAO)
         .to_string();
     com_trava(base, || {
-        let status = Command::new("say")
-            .args(["-v", &voz_reserva, texto])
-            .status();
-        if status.map(|s| !s.success()).unwrap_or(true) {
-            let _ = Command::new("say").arg(texto).status();
-        }
+        crate::platform::falar_reserva(&voz_reserva, texto);
     });
 }
 

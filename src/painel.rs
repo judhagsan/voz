@@ -86,9 +86,9 @@ pub fn salvar_cache_prs_disco(base: &Path, cache: &HashMap<String, serde_json::V
 }
 
 pub fn descobrir_repos(base: &Path) -> Vec<PathBuf> {
-    let home = match std::env::var("HOME") {
-        Ok(h) => PathBuf::from(h),
-        Err(_) => return Vec::new(),
+    let home = match crate::platform::pasta_usuario() {
+        Some(h) => h,
+        None => return Vec::new(),
     };
 
     let mut candidatos = Vec::new();
