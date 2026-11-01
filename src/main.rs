@@ -20,11 +20,43 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn caminho_base() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".claude").join("voz")
-    } else {
-        PathBuf::from(".")
+    if let Ok(dir) = std::env::var("VOZ_DIR") {
+        let p = PathBuf::from(dir);
+        if p.exists() {
+            return p;
+        }
     }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Ok(real_exe) = fs::canonicalize(&exe) {
+            if let Some(repo) = real_exe
+                .parent()
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
+            {
+                if repo.join("config.json").exists() {
+                    return repo.to_path_buf();
+                }
+            }
+            if let Some(repo) = real_exe.parent() {
+                if repo.join("config.json").exists() {
+                    return repo.to_path_buf();
+                }
+            }
+        }
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        let home_path = PathBuf::from(home);
+        for candidata in [home_path.join("voz"), home_path.join(".config").join("voz")] {
+            if candidata.join("config.json").exists() {
+                return candidata;
+            }
+        }
+        return home_path.join("voz");
+    }
+
+    PathBuf::from(".")
 }
 
 fn ler_stdin() -> String {
@@ -198,5 +230,18 @@ fn processar_aviso(base: &Path, categoria: &str, entrada: &str) {
 
     if let Some(frase) = fala::sortear_frase(base, categoria) {
         fala::falar(base, &frase, 30);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_caminho_base_respeita_env() {
+        let temp = std::env::temp_dir();
+        std::env::set_var("VOZ_DIR", &temp);
+        assert_eq!(caminho_base(), temp);
+        std::env::remove_var("VOZ_DIR");
     }
 }

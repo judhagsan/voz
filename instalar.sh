@@ -1,9 +1,42 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DESTINO="$HOME/.claude/voz"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$HOME/.local/bin"
 REPO_PADRAO="https://github.com/judhagsan/voz.git"
+
+if [ -d "$SCRIPT_DIR/.git" ] && [ -f "$SCRIPT_DIR/Cargo.toml" ]; then
+  DESTINO="$SCRIPT_DIR"
+elif [ -n "${VOZ_DIR:-}" ]; then
+  DESTINO="$VOZ_DIR"
+elif [ -t 0 ] || [ -e /dev/tty ]; then
+  echo "==> Onde deseja instalar o repositório do Voz?"
+  echo "    1) $HOME/voz (junto dos seus repositórios) [padrão]"
+  echo "    2) $HOME/.config/voz (configurações do sistema)"
+  echo "    3) Outro caminho customizado"
+  printf "Escolha [1/2/3] (Enter para 1): "
+  if [ -t 0 ]; then
+    read -r opcao || opcao="1"
+  else
+    read -r opcao </dev/tty || opcao="1"
+  fi
+  case "${opcao:-1}" in
+    1) DESTINO="$HOME/voz" ;;
+    2) DESTINO="$HOME/.config/voz" ;;
+    3)
+      printf "Digite o caminho completo: "
+      if [ -t 0 ]; then
+        read -r custom || custom="$HOME/voz"
+      else
+        read -r custom </dev/tty || custom="$HOME/voz"
+      fi
+      DESTINO="${custom/#\~/$HOME}"
+      ;;
+    *) DESTINO="$HOME/voz" ;;
+  esac
+else
+  DESTINO="$HOME/voz"
+fi
 
 echo "==> Instalando Voz em $DESTINO..."
 
@@ -45,11 +78,12 @@ if ! command -v cargo >/dev/null 2>&1; then
   brew install rust
 fi
 
-mkdir -p "$HOME/.claude" "$BIN_DIR"
+mkdir -p "$BIN_DIR"
 
 if [ ! -d "$DESTINO/.git" ]; then
   REPO_URL="${VOZ_REPO_URL:-$REPO_PADRAO}"
   echo "==> Clonando $REPO_URL em $DESTINO..."
+  mkdir -p "$(dirname "$DESTINO")"
   git clone "$REPO_URL" "$DESTINO"
 else
   echo "==> Repositório já presente em $DESTINO."
