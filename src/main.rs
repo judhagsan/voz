@@ -110,17 +110,10 @@ fn main() {
         fs::create_dir_all(&estado_dir).ok();
         let lock_file = estado_dir.join("agy-monitor.lock");
 
-        if let Ok(conteudo) = fs::read_to_string(&lock_file) {
-            if let Ok(ts) = conteudo.trim().parse::<u64>() {
-                let agora = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                if agora.saturating_sub(ts) < 4 {
-                    return;
-                }
-            }
-        }
+        let _trava = match platform::tentar_trava_exclusiva(&lock_file) {
+            Some(f) => f,
+            None => return,
+        };
 
         let aviso_file = estado_dir.join("agy-ultimo-aviso-step");
         let encerrar_file = estado_dir.join("agy-encerrar-monitor");
@@ -135,18 +128,12 @@ fn main() {
                 break;
             }
 
-            let agora = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            fs::write(&lock_file, agora.to_string()).ok();
-
             if let Some((arquivo, step)) = agy::detectar_confirmacao_pendente() {
                 let chave = format!("{arquivo}:{step}");
                 if ultimo_avisado.as_deref() != Some(&chave) {
                     ultimo_avisado = Some(chave.clone());
                     fs::write(&aviso_file, &chave).ok();
-                    processar_aviso(&base, "permissao", "");
+                    disparar_desacoplado("permissao", "");
                 }
             }
 
@@ -154,18 +141,6 @@ fn main() {
         }
 
         fs::remove_file(&lock_file).ok();
-        return;
-    }
-
-    if args.get(1).map(String::as_str) == Some("--agy-verificar-permissao") {
-        let token = ler_stdin();
-        std::thread::sleep(std::time::Duration::from_millis(750));
-        let pendente_file = base.join("estado").join("agy-pendente");
-        if let Ok(conteudo) = fs::read_to_string(&pendente_file) {
-            if conteudo.trim() == token.trim() {
-                processar_aviso(&base, "permissao", "");
-            }
-        }
         return;
     }
 
@@ -190,6 +165,8 @@ fn main() {
 
         match categoria {
             "pre-invocation" => {
+                let encerrar_file = estado_dir.join("agy-encerrar-monitor");
+                fs::remove_file(&encerrar_file).ok();
                 println!("{{}}");
                 disparar_desacoplado("--agy-monitorar-confirmacao", "");
             }
@@ -199,26 +176,18 @@ fn main() {
             }
             "permissao" => {
                 disparar_desacoplado("--agy-monitorar-confirmacao", "");
-                let nanos = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.subsec_nanos() % 10000)
-                    .unwrap_or(0);
-                let token = format!("{}-{}", std::process::id(), nanos);
 
-                match agy::analisar_pre_tool(&entrada) {
-                    agy::AgyDecisao::Allow => {
-                        println!("{{\"decision\": \"allow\"}}");
-                    }
-                    agy::AgyDecisao::Espera => {
-                        fs::write(&pendente_file, &token).ok();
-                        println!("{{\"decision\": \"allow\"}}");
-                        disparar_desacoplado("--agy-verificar-espera", &token);
-                    }
-                    agy::AgyDecisao::Ask => {
-                        fs::write(&pendente_file, &token).ok();
-                        println!("{{\"decision\": \"ask\"}}");
-                        disparar_desacoplado("--agy-verificar-permissao", &token);
-                    }
+                if agy::analisar_pre_tool(&entrada) == agy::AgyDecisao::Espera {
+                    let nanos = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.subsec_nanos() % 10000)
+                        .unwrap_or(0);
+                    let token = format!("{}-{}", std::process::id(), nanos);
+                    fs::write(&pendente_file, &token).ok();
+                    println!("{{\"decision\": \"allow\"}}");
+                    disparar_desacoplado("--agy-verificar-espera", &token);
+                } else {
+                    println!("{{\"decision\": \"allow\"}}");
                 }
             }
             _ => {
