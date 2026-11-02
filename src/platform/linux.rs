@@ -84,6 +84,34 @@ where
     }
 }
 
+pub struct TravaExclusiva {
+    arquivo: File,
+}
+
+impl Drop for TravaExclusiva {
+    fn drop(&mut self) {
+        unsafe {
+            libc::flock(self.arquivo.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+pub fn tentar_trava_exclusiva(caminho: &Path) -> Option<TravaExclusiva> {
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(caminho)
+        .ok()?;
+    let ret = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if ret == 0 {
+        Some(TravaExclusiva { arquivo: f })
+    } else {
+        None
+    }
+}
+
 pub fn tamanho_terminal() -> Option<(usize, usize)> {
     unsafe {
         let mut ws = libc::winsize {
