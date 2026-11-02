@@ -147,40 +147,73 @@ if [ -f "$DESTINO/tmux.conf" ]; then
   fi
 fi
 
-if ! grep -qs '\.local/bin' "$HOME/.zshrc" 2>/dev/null; then
-  printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >>"$HOME/.zshrc"
-  echo "==> Adicionado ~/.local/bin ao PATH no ~/.zshrc."
-fi
+for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+  if [ -f "$rc" ] && ! grep -qs '\.local/bin' "$rc" 2>/dev/null; then
+    printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >>"$rc"
+    echo "==> Adicionado ~/.local/bin ao PATH no $rc."
+  fi
+done
 
-/usr/bin/python3 "$DESTINO/scripts/instalar_hooks.py" --destino "$DESTINO"
-
-echo ""
-echo "==> Configuração de Chaves de API (Keychain do macOS):"
-if security find-generic-password -s gemini-api-key >/dev/null 2>&1; then
-  echo "    [✓] Gemini: chave principal configurada."
-else
-  echo "    [ ] Gemini (gratuito): https://aistudio.google.com/apikey"
-  echo "        security add-generic-password -a \"$USER\" -s gemini-api-key -w \"SUA_CHAVE\""
-  echo "        Dica: adicione gemini-api-key-2 para multiplicar a cota diária!"
-fi
-
-if security find-generic-password -s elevenlabs-api-key >/dev/null 2>&1; then
-  echo "    [✓] ElevenLabs: chave configurada."
-else
-  echo "    [-] ElevenLabs (opcional): https://elevenlabs.io"
-  echo "        security add-generic-password -a \"$USER\" -s elevenlabs-api-key -w \"SUA_CHAVE\""
-fi
-
-if security find-generic-password -s openai-api-key >/dev/null 2>&1; then
-  echo "    [✓] OpenAI: chave configurada."
-else
-  echo "    [-] OpenAI (opcional): https://platform.openai.com/api-keys"
-  echo "        security add-generic-password -a \"$USER\" -s openai-api-key -w \"SUA_CHAVE\""
-fi
-
-echo "    [✓] Siri Natural (macOS 27 - Voz 2): pronta para uso offline sem chaves."
+PYTHON_BIN="$(command -v python3 || command -v python || echo "/usr/bin/python3")"
+"$PYTHON_BIN" "$DESTINO/scripts/instalar_hooks.py" --destino "$DESTINO"
 
 echo ""
-echo "==> Instalação concluída! Abra um novo terminal (ou rode 'source ~/.zshrc') e teste:"
-echo "    voz                                  # painel de repositórios e cotas"
-echo "    voz sintetizar \"Olá, tudo certo.\"     # voz"
+if [ "$SO" = "Darwin" ]; then
+  echo "==> Configuração de Chaves de API (macOS Keychain ou Variável de Ambiente):"
+  if [ -n "${GEMINI_API_KEY:-}" ] || security find-generic-password -s gemini-api-key >/dev/null 2>&1; then
+    echo "    [✓] Gemini: chave principal configurada."
+  else
+    echo "    [ ] Gemini (gratuito): https://aistudio.google.com/apikey"
+    echo "        export GEMINI_API_KEY=\"SUA_CHAVE\" (no ~/.zshrc) ou:"
+    echo "        security add-generic-password -a \"$USER\" -s gemini-api-key -w \"SUA_CHAVE\""
+    echo "        Dica: adicione GEMINI_API_KEY_2 (ou gemini-api-key-2) para multiplicar a cota diária!"
+  fi
+
+  if [ -n "${ELEVENLABS_API_KEY:-}" ] || security find-generic-password -s elevenlabs-api-key >/dev/null 2>&1; then
+    echo "    [✓] ElevenLabs: chave configurada."
+  else
+    echo "    [-] ElevenLabs (opcional): https://elevenlabs.io"
+    echo "        export ELEVENLABS_API_KEY=\"SUA_CHAVE\" ou:"
+    echo "        security add-generic-password -a \"$USER\" -s elevenlabs-api-key -w \"SUA_CHAVE\""
+  fi
+
+  if [ -n "${OPENAI_API_KEY:-}" ] || security find-generic-password -s openai-api-key >/dev/null 2>&1; then
+    echo "    [✓] OpenAI: chave configurada."
+  else
+    echo "    [-] OpenAI (opcional): https://platform.openai.com/api-keys"
+    echo "        export OPENAI_API_KEY=\"SUA_CHAVE\" ou:"
+    echo "        security add-generic-password -a \"$USER\" -s openai-api-key -w \"SUA_CHAVE\""
+  fi
+
+  echo "    [✓] Siri Natural (macOS 27 - Voz 2): pronta para uso offline sem chaves."
+else
+  echo "==> Configuração de Chaves de API (Linux - Variável de Ambiente ou ~/.config/voz/credentials):"
+  if [ -n "${GEMINI_API_KEY:-}" ] || [ -f "$HOME/.config/voz/gemini-api-key" ] || (command -v secret-tool >/dev/null 2>&1 && secret-tool lookup service gemini-api-key >/dev/null 2>&1); then
+    echo "    [✓] Gemini: chave principal configurada."
+  else
+    echo "    [ ] Gemini (gratuito): https://aistudio.google.com/apikey"
+    echo "        export GEMINI_API_KEY=\"SUA_CHAVE\" (adicione ao ~/.bashrc ou ~/.zshrc)"
+    echo "        Dica: adicione GEMINI_API_KEY_2 para multiplicar a cota diária!"
+  fi
+
+  if [ -n "${ELEVENLABS_API_KEY:-}" ] || [ -f "$HOME/.config/voz/elevenlabs-api-key" ] || (command -v secret-tool >/dev/null 2>&1 && secret-tool lookup service elevenlabs-api-key >/dev/null 2>&1); then
+    echo "    [✓] ElevenLabs: chave configurada."
+  else
+    echo "    [-] ElevenLabs (opcional): https://elevenlabs.io"
+    echo "        export ELEVENLABS_API_KEY=\"SUA_CHAVE\""
+  fi
+
+  if [ -n "${OPENAI_API_KEY:-}" ] || [ -f "$HOME/.config/voz/openai-api-key" ] || (command -v secret-tool >/dev/null 2>&1 && secret-tool lookup service openai-api-key >/dev/null 2>&1); then
+    echo "    [✓] OpenAI: chave configurada."
+  else
+    echo "    [-] OpenAI (opcional): https://platform.openai.com/api-keys"
+    echo "        export OPENAI_API_KEY=\"SUA_CHAVE\""
+  fi
+
+  echo "    [✓] Síntese offline (speech-dispatcher / espeak-ng): pronta para uso offline sem chaves."
+fi
+
+echo ""
+echo "==> Instalação concluída! Abra um novo terminal (ou rode 'source ~/.zshrc' / 'source ~/.bashrc') e teste:"
+echo "    voz"
+echo "    voz sintetizar \"Olá, tudo certo.\""
