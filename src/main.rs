@@ -105,6 +105,58 @@ fn main() {
         return;
     }
 
+    if args.get(1).map(String::as_str) == Some("--agy-monitorar-confirmacao") {
+        let estado_dir = base.join("estado");
+        fs::create_dir_all(&estado_dir).ok();
+        let lock_file = estado_dir.join("agy-monitor.lock");
+
+        if let Ok(conteudo) = fs::read_to_string(&lock_file) {
+            if let Ok(ts) = conteudo.trim().parse::<u64>() {
+                let agora = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                if agora.saturating_sub(ts) < 4 {
+                    return;
+                }
+            }
+        }
+
+        let aviso_file = estado_dir.join("agy-ultimo-aviso-step");
+        let encerrar_file = estado_dir.join("agy-encerrar-monitor");
+        fs::remove_file(&encerrar_file).ok();
+
+        let mut ultimo_avisado: Option<String> = fs::read_to_string(&aviso_file)
+            .ok()
+            .map(|s| s.trim().to_string());
+
+        for _ in 0..240 {
+            if encerrar_file.exists() {
+                break;
+            }
+
+            let agora = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            fs::write(&lock_file, agora.to_string()).ok();
+
+            if let Some((arquivo, step)) = agy::detectar_confirmacao_pendente() {
+                let chave = format!("{arquivo}:{step}");
+                if ultimo_avisado.as_deref() != Some(&chave) {
+                    ultimo_avisado = Some(chave.clone());
+                    fs::write(&aviso_file, &chave).ok();
+                    processar_aviso(&base, "permissao", "");
+                }
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+
+        fs::remove_file(&lock_file).ok();
+        return;
+    }
+
     if args.get(1).map(String::as_str) == Some("--agy-verificar-permissao") {
         let token = ler_stdin();
         std::thread::sleep(std::time::Duration::from_millis(750));
@@ -137,11 +189,16 @@ fn main() {
         let pendente_file = estado_dir.join("agy-pendente");
 
         match categoria {
+            "pre-invocation" => {
+                println!("{{}}");
+                disparar_desacoplado("--agy-monitorar-confirmacao", "");
+            }
             "pos-tool" => {
                 fs::remove_file(&pendente_file).ok();
                 println!("{{}}");
             }
             "permissao" => {
+                disparar_desacoplado("--agy-monitorar-confirmacao", "");
                 let nanos = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.subsec_nanos() % 10000)
@@ -165,6 +222,8 @@ fn main() {
                 }
             }
             _ => {
+                let encerrar_file = estado_dir.join("agy-encerrar-monitor");
+                fs::write(&encerrar_file, "1").ok();
                 fs::remove_file(&pendente_file).ok();
                 println!("{{}}");
 

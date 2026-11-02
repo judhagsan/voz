@@ -325,13 +325,12 @@ fn dividir_subcomandos(cmd: &str) -> Vec<&str> {
     pedacos
 }
 
-pub fn comando_autorizado_agy(cmd: &str) -> bool {
+pub fn comando_autorizado_com_allow(cmd: &str, allow_set: &HashSet<String>) -> bool {
     let trimmed = cmd.trim();
     if trimmed.is_empty() {
         return false;
     }
 
-    let allow_set = carregar_allow_set_agy();
     let subcomandos = dividir_subcomandos(trimmed);
 
     if subcomandos.is_empty() {
@@ -339,12 +338,16 @@ pub fn comando_autorizado_agy(cmd: &str) -> bool {
     }
 
     for sub in subcomandos {
-        if !subcomando_autorizado(sub, &allow_set) {
+        if !subcomando_autorizado(sub, allow_set) {
             return false;
         }
     }
 
     true
+}
+
+pub fn comando_autorizado_agy(cmd: &str) -> bool {
+    comando_autorizado_com_allow(cmd, &carregar_allow_set_agy())
 }
 
 pub fn analisar_pre_tool(entrada_json: &str) -> AgyDecisao {
@@ -365,6 +368,10 @@ pub fn analisar_pre_tool(entrada_json: &str) -> AgyDecisao {
         return AgyDecisao::Espera;
     }
 
+    if nome == "write_file" || nome == "edit_file" {
+        return AgyDecisao::Ask;
+    }
+
     if nome == "run_command" {
         let cmd = args
             .and_then(|a| a.get("CommandLine"))
@@ -380,6 +387,104 @@ pub fn analisar_pre_tool(entrada_json: &str) -> AgyDecisao {
     }
 
     AgyDecisao::Allow
+}
+
+pub fn analisar_confirmacao_pendente(texto_log: &str) -> Option<u64> {
+    let mut ultimo_surfacing = None;
+    let mut ultimo_responding = None;
+
+    for linha in texto_log.lines() {
+        if let Some(pos) = linha.find("Surfacing tool confirmation:") {
+            if let Some(step_pos) = linha[pos..].find("at step ") {
+                let resto = &linha[pos + step_pos + 8..];
+                let num_str: String = resto.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if let Ok(num) = num_str.parse::<u64>() {
+                    ultimo_surfacing = Some(num);
+                }
+            }
+        } else if let Some(pos) = linha.find("Responding to tool confirmation:") {
+            if let Some(step_pos) = linha[pos..].find("stepIdx=") {
+                let resto = &linha[pos + step_pos + 8..];
+                let num_str: String = resto.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if let Ok(num) = num_str.parse::<u64>() {
+                    ultimo_responding = Some(num);
+                }
+            }
+        }
+    }
+
+    match (ultimo_surfacing, ultimo_responding) {
+        (Some(s), Some(r)) if s > r => Some(s),
+        (Some(s), None) => Some(s),
+        _ => None,
+    }
+}
+
+pub fn detectar_confirmacao_pendente() -> Option<(String, u64)> {
+    let home = crate::platform::pasta_usuario()?;
+    let log_dir = home.join(".gemini").join("antigravity-cli").join("log");
+    if !log_dir.is_dir() {
+        return None;
+    }
+
+    let mut entradas: Vec<_> = fs::read_dir(log_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let nome = e.file_name();
+            let s = nome.to_string_lossy();
+            s.starts_with("cli-") && s.ends_with(".log")
+        })
+        .collect();
+
+    entradas.sort_by_key(|e| {
+        e.metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+    });
+
+    let agora = std::time::SystemTime::now();
+
+    for entry in entradas.into_iter().rev() {
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let mtime = match meta.modified() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if let Ok(diff) = agora.duration_since(mtime) {
+            if diff.as_secs() > 120 {
+                break;
+            }
+        }
+
+        let mut f = match fs::File::open(entry.path()) {
+            Ok(file) => file,
+            Err(_) => continue,
+        };
+        use std::io::{Read, Seek, SeekFrom};
+        let len = meta.len();
+        let ler_desde = len.saturating_sub(32_768);
+        if f.seek(SeekFrom::Start(ler_desde)).is_err() {
+            continue;
+        }
+        let mut buffer = String::new();
+        if f.read_to_string(&mut buffer).is_err() {
+            let mut bytes = Vec::new();
+            if f.seek(SeekFrom::Start(ler_desde)).is_ok() && f.read_to_end(&mut bytes).is_ok() {
+                buffer = String::from_utf8_lossy(&bytes).to_string();
+            }
+        }
+
+        if let Some(step) = analisar_confirmacao_pendente(&buffer) {
+            let nome = entry.file_name().to_string_lossy().to_string();
+            return Some((nome, step));
+        }
+    }
+
+    None
 }
 
 #[allow(dead_code)]
@@ -423,6 +528,17 @@ mod tests {
     }
 
     #[test]
+    fn test_criacao_e_edicao_arquivo_pedem_permissao() {
+        let write_json = r#"{"toolCall":{"name":"write_file","args":{"Path":"novo.txt"}}}"#;
+        assert_eq!(analisar_pre_tool(write_json), AgyDecisao::Ask);
+        assert!(agy_precisa_permissao(write_json));
+
+        let edit_json = r#"{"toolCall":{"name":"edit_file","args":{"Path":"existente.txt"}}}"#;
+        assert_eq!(analisar_pre_tool(edit_json), AgyDecisao::Ask);
+        assert!(agy_precisa_permissao(edit_json));
+    }
+
+    #[test]
     fn test_comandos_leitura_autorizados() {
         assert!(comando_autorizado_agy("find . -name '*.rs'"));
         assert!(comando_autorizado_agy("sips -g all imagem.png"));
@@ -443,9 +559,26 @@ mod tests {
 
     #[test]
     fn test_git_mutacao_precisa_permissao() {
-        assert!(!comando_autorizado_agy("git commit -m 'feat: teste'"));
-        assert!(!comando_autorizado_agy("git push origin main"));
-        assert!(!comando_autorizado_agy("git branch -D feat/antiga"));
+        let allow_vazio = HashSet::new();
+        assert!(!comando_autorizado_com_allow(
+            "git commit -m 'feat: teste'",
+            &allow_vazio
+        ));
+        assert!(!comando_autorizado_com_allow(
+            "git push origin main",
+            &allow_vazio
+        ));
+        assert!(!comando_autorizado_com_allow(
+            "git branch -D feat/antiga",
+            &allow_vazio
+        ));
+
+        let mut allow_custom = HashSet::new();
+        allow_custom.insert("command(git commit)".to_string());
+        assert!(comando_autorizado_com_allow(
+            "git commit -m 'feat: teste'",
+            &allow_custom
+        ));
     }
 
     #[test]
@@ -458,5 +591,23 @@ mod tests {
         assert!(comando_autorizado_agy(
             "python3 -c \"import json; print('ok')\""
         ));
+    }
+
+    #[test]
+    fn test_analisar_confirmacao_pendente_detecta_espera() {
+        let log_pendente = r#"
+I1101 21:18:51.377147 169 tool_confirmation_manager.go:236] Surfacing tool confirmation: "RunCommand" at step 403
+I1101 21:20:01.379076 239 input_loop.go:778] Responding to tool confirmation: convID=c6426cfa, stepIdx=403, approved=true
+I1101 21:22:13.145764 169 tool_confirmation_manager.go:236] Surfacing tool confirmation: "EditFile" at step 437
+"#;
+        assert_eq!(analisar_confirmacao_pendente(log_pendente), Some(437));
+
+        let log_respondido = r#"
+I1101 21:18:51.377147 169 tool_confirmation_manager.go:236] Surfacing tool confirmation: "RunCommand" at step 403
+I1101 21:20:01.379076 239 input_loop.go:778] Responding to tool confirmation: convID=c6426cfa, stepIdx=403, approved=true
+I1101 21:22:13.145764 169 tool_confirmation_manager.go:236] Surfacing tool confirmation: "EditFile" at step 437
+I1101 21:22:22.696316 239 input_loop.go:778] Responding to tool confirmation: convID=c6426cfa, stepIdx=437, approved=true
+"#;
+        assert_eq!(analisar_confirmacao_pendente(log_respondido), None);
     }
 }
