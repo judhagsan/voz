@@ -35,6 +35,17 @@ impl Config {
                 .unwrap_or(padrao)
                 .to_string()
         };
+        let padrao_modelos = || {
+            vec![
+                "gemini-3.8-flash-tts".to_string(),
+                "gemini-3.8-flash-lite-tts".to_string(),
+                "gemini-3.1-flash-tts-preview".to_string(),
+                "gemini-2.5-flash-preview-tts".to_string(),
+                "gemini-2.5-pro-preview-tts".to_string(),
+            ]
+        };
+        let eh_modelo_proibido = |m: &str| m.to_lowercase().contains("argon");
+
         let modelos = bloco
             .and_then(|b| b.get("modelos"))
             .and_then(|m| m.as_array())
@@ -42,6 +53,7 @@ impl Config {
                 arr.iter()
                     .filter_map(|v| v.as_str())
                     .filter(|s| !s.trim().is_empty())
+                    .filter(|s| !eh_modelo_proibido(s))
                     .map(String::from)
                     .collect::<Vec<_>>()
             })
@@ -51,17 +63,17 @@ impl Config {
                     .and_then(|b| b.get("modelo"))
                     .and_then(|v| v.as_str())
                     .filter(|s| !s.trim().is_empty())
+                    .filter(|s| !eh_modelo_proibido(s))
                     .map(|s| vec![s.to_string()])
             })
-            .unwrap_or_else(|| {
-                vec![
-                    "gemini-3.8-flash-tts".to_string(),
-                    "gemini-3.8-flash-lite-tts".to_string(),
-                    "gemini-3.1-flash-tts-preview".to_string(),
-                    "gemini-2.5-flash-preview-tts".to_string(),
-                    "gemini-2.5-pro-preview-tts".to_string(),
-                ]
-            });
+            .unwrap_or_else(padrao_modelos);
+
+        let modelo_resumo_bruto = campo("modelo_resumo", "gemini-3.5-flash-lite");
+        let modelo_resumo = if eh_modelo_proibido(&modelo_resumo_bruto) {
+            "gemini-3.5-flash-lite".to_string()
+        } else {
+            modelo_resumo_bruto
+        };
 
         Config {
             modelos,
@@ -70,7 +82,7 @@ impl Config {
                 "estilo",
                 "Português do Brasil, sotaque brasileiro. Voz feminina calma, natural e profissional.",
             ),
-            modelo_resumo: campo("modelo_resumo", "gemini-3.5-flash-lite"),
+            modelo_resumo,
         }
     }
 
@@ -159,6 +171,9 @@ pub fn sintetizar_em_stream(
     let mut ultimo_erro = String::new();
 
     for modelo in &cfg.modelos {
+        if modelo.to_lowercase().contains("argon") {
+            continue;
+        }
         for chave in &chaves {
             let agente: ureq::Agent = ureq::Agent::config_builder()
                 .timeout_global(Some(timeout))
@@ -185,10 +200,12 @@ pub fn sintetizar_em_stream(
                 let corpo = resposta.body_mut().read_to_string().unwrap_or_default();
                 let motivo: String = corpo.chars().take(300).collect();
                 ultimo_erro = format!("HTTP {} em {modelo}: {motivo}", status.as_u16());
-                eprintln!(
-                    "[voz] {modelo} indisponível (HTTP {}); tentando próximo da cascata.",
-                    status.as_u16()
-                );
+                if std::env::var("VOZ_DEBUG").is_ok() {
+                    eprintln!(
+                        "[voz] {modelo} indisponível (HTTP {}); tentando próximo da cascata.",
+                        status.as_u16()
+                    );
+                }
                 continue;
             }
 
@@ -270,6 +287,31 @@ mod tests {
         let bloco_multi = serde_json::json!({"modelos": ["mod1", "mod2"]});
         let cfg_multi = Config::de_json(Some(&bloco_multi));
         assert_eq!(cfg_multi.modelos, vec!["mod1", "mod2"]);
+    }
+
+    #[test]
+    fn test_config_bloqueia_modelo_argon() {
+        let bloco = serde_json::json!({
+            "modelos": ["gemini-4-argon", "gemini-3.8-flash-tts", "argon-ultra-tts"],
+            "modelo_resumo": "gemini-4-argon-high"
+        });
+        let cfg = Config::de_json(Some(&bloco));
+        assert_eq!(cfg.modelos, vec!["gemini-3.8-flash-tts"]);
+        assert_eq!(cfg.modelo_resumo, "gemini-3.5-flash-lite");
+    }
+
+    #[test]
+    fn test_config_bloqueia_argon_unico_recaindo_no_padrao() {
+        let bloco = serde_json::json!({
+            "modelo": "gemini-4-argon",
+            "modelo_resumo": "gemini-4-argon"
+        });
+        let cfg = Config::de_json(Some(&bloco));
+        assert!(!cfg
+            .modelos
+            .iter()
+            .any(|m| m.to_lowercase().contains("argon")));
+        assert_eq!(cfg.modelo_resumo, "gemini-3.5-flash-lite");
     }
 
     #[test]
