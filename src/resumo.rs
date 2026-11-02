@@ -19,11 +19,12 @@ fn instrucao(palavras: usize) -> String {
          - no máximo {palavras} palavras, em uma a três frases curtas;\n\
          - comece dizendo o projeto, exatamente no formato \"No <projeto>, ...\", a não ser que \
          o projeto seja \"geral\";\n\
-         - diga o resultado principal; se o agente fez uma pergunta ou espera uma decisão do \
-         usuário, termine dizendo isso;\n\
+         - diga o resultado principal trazendo contexto técnico objetivo (módulos, componentes, \
+         ferramentas, causas de erro ou testes envolvidos), evitando descrições vagas;\n\
+         - se o agente fez uma pergunta ou espera uma decisão do usuário, termine dizendo isso;\n\
          - não invente nada que não esteja na resposta;\n\
-         - escreva como se fala: sem caminhos de arquivo, código, comandos, símbolos, links ou \
-         listas.\n\
+         - escreva como se fala em uma conversa técnica: use termos técnicos com naturalidade, mas \
+         sem caminhos de arquivo, blocos de código, comandos brutos, símbolos, links ou listas.\n\
          Responda só com o texto da fala."
     )
 }
@@ -163,5 +164,11 @@ mod tests {
     #[test]
     fn test_extrair_texto_vazio_vira_erro() {
         assert!(extrair_texto(&serde_json::json!({"candidates": []})).is_err());
+    }
+
+    #[test]
+    fn test_instrucao_contem_diretriz_de_contexto_tecnico() {
+        let texto = instrucao(40);
+        assert!(texto.contains("contexto técnico objetivo"));
     }
 }
