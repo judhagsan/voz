@@ -22,7 +22,8 @@ use crate::painel::{
 /// Leitura mais velha que isso é refeita.
 pub const VALIDADE_SEG: i64 = 120;
 const LIMITE_COMANDO: Duration = Duration::from_secs(40);
-const LARGURA_CARD: usize = 48;
+const COL_LARGURA: usize = 34;
+const LARGURA_CARD: usize = COL_LARGURA * 3 + 6;
 const MESES: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
@@ -34,6 +35,8 @@ pub struct Janela {
     pub usado: u32,
     /// Instante da renovação, em segundos desde a época Unix.
     pub renova: Option<i64>,
+    /// Detalhe textual à direita (ex: saldo de créditos); quando ausente, usa o tempo de renovação.
+    pub detalhe: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -205,6 +208,7 @@ pub fn ler_claude(texto: &str, agora: DateTime<Local>) -> Provedor {
             renova: c
                 .get(4)
                 .and_then(|r| ler_renovacao_claude(r.as_str(), agora)),
+            detalhe: None,
         });
     }
     if janelas.is_empty() {
@@ -267,6 +271,7 @@ pub fn ler_antigravity(json: &str) -> Provedor {
                     .and_then(|r| r.as_str())
                     .and_then(|r| DateTime::parse_from_rfc3339(r).ok())
                     .map(|d| d.timestamp()),
+                detalhe: None,
             });
         }
         // A API não garante a ordem; 5h antes da semana, igual ao `/usage`.
@@ -331,6 +336,7 @@ fn grupo_chatgpt(quota: &serde_json::Value, nome: String) -> Option<Grupo> {
                 .get("resetsAt")
                 .or_else(|| janela.get("resets_at"))
                 .and_then(|r| r.as_i64()),
+            detalhe: None,
         });
     }
     if janelas.is_empty() {
@@ -517,11 +523,194 @@ fn buscar_claude(cwd: &Path) -> Provedor {
     }
 }
 
-fn buscar_antigravity(cwd: &Path) -> Provedor {
-    match executar("agy", &["-p", "/quota", "--output-format", "json"], cwd) {
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfigCreditosGcp {
+    pub ativo: bool,
+    pub total: f64,
+    pub usado_inicial: f64,
+    pub moeda: String,
+    pub cotacao_usd: f64,
+    pub data_inicio: i64,
+}
+
+impl ConfigCreditosGcp {
+    pub fn de_json(bloco: Option<&serde_json::Value>) -> Option<ConfigCreditosGcp> {
+        let b = bloco?;
+        if b.get("ativo").and_then(|a| a.as_bool()) == Some(false) {
+            return None;
+        }
+        let total = b.get("total").and_then(|t| t.as_f64()).unwrap_or(413.28);
+        let usado_inicial = b
+            .get("usado_inicial")
+            .and_then(|u| u.as_f64())
+            .unwrap_or(14.69);
+        let moeda = b
+            .get("moeda")
+            .and_then(|m| m.as_str())
+            .unwrap_or("R$")
+            .to_string();
+        let cotacao_usd = b
+            .get("cotacao_usd")
+            .and_then(|c| c.as_f64())
+            .unwrap_or(5.871);
+        let data_inicio = b
+            .get("data_inicio")
+            .and_then(|d| d.as_str())
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.timestamp())
+            .unwrap_or(0);
+
+        Some(ConfigCreditosGcp {
+            ativo: true,
+            total,
+            usado_inicial,
+            moeda,
+            cotacao_usd,
+            data_inicio,
+        })
+    }
+}
+
+pub fn calcular_gasto_argon_incremental(
+    pasta_brain: &Path,
+    desde_timestamp: i64,
+    cotacao_usd: f64,
+) -> f64 {
+    let Ok(entries) = fs::read_dir(pasta_brain) else {
+        return 0.0;
+    };
+
+    let mut total_in: u64 = 0;
+    let mut total_out: u64 = 0;
+    let mut total_cache: u64 = 0;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let transcript = path
+            .join(".system_generated")
+            .join("logs")
+            .join("transcript.jsonl");
+
+        if let Ok(meta) = fs::metadata(&transcript) {
+            if let Ok(modificado) = meta.modified() {
+                let ts = modificado
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                if ts < desde_timestamp {
+                    continue;
+                }
+            }
+        } else {
+            continue;
+        }
+
+        let Ok(arquivo) = fs::File::open(&transcript) else {
+            continue;
+        };
+        let leitor = BufReader::new(arquivo);
+        for linha in leitor.lines().map_while(Result::ok) {
+            if !linha.contains("\"PLANNER_RESPONSE\"") {
+                continue;
+            }
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&linha) {
+                if let Some(created) = v.get("created_at").and_then(|c| c.as_str()) {
+                    if let Ok(dt) = DateTime::parse_from_rfc3339(created) {
+                        if dt.timestamp() < desde_timestamp {
+                            continue;
+                        }
+                    }
+                }
+                total_in += v.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+                total_out += v.get("output_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+                total_cache += v
+                    .get("cache_read_tokens")
+                    .and_then(|t| t.as_u64())
+                    .unwrap_or(0);
+            }
+        }
+    }
+
+    let custo_usd = (total_in as f64 / 1_000_000.0 * 2.0)
+        + (total_out as f64 / 1_000_000.0 * 10.0)
+        + (total_cache as f64 / 1_000_000.0 * 0.10);
+
+    custo_usd * cotacao_usd
+}
+
+pub fn criar_grupo_creditos_gcp(cfg: &ConfigCreditosGcp, gasto_incremental: f64) -> Grupo {
+    let usado_total = cfg.usado_inicial + gasto_incremental;
+    let disponivel = (cfg.total - usado_total).max(0.0);
+    let pct_usado = if cfg.total > 0.0 {
+        ((usado_total / cfg.total) * 100.0)
+            .round()
+            .clamp(0.0, 100.0) as u32
+    } else {
+        100
+    };
+
+    let texto_livre = format!("{} {:.2} livre", cfg.moeda, disponivel).replace('.', ",");
+    let detalhe = if texto_livre.chars().count() <= 15 {
+        texto_livre
+    } else {
+        let texto_curto = format!("{} {:.1} livre", cfg.moeda, disponivel).replace('.', ",");
+        if texto_curto.chars().count() <= 15 {
+            texto_curto
+        } else {
+            let texto_int = format!("{} {:.0} livre", cfg.moeda, disponivel);
+            texto_int.chars().take(15).collect()
+        }
+    };
+
+    Grupo {
+        nome: "Gemini 4 Argon (API GCP)".to_string(),
+        janelas: vec![Janela {
+            rotulo: "Créditos".to_string(),
+            usado: pct_usado,
+            renova: None,
+            detalhe: Some(detalhe),
+        }],
+    }
+}
+
+fn buscar_antigravity(base: &Path, cwd: &Path) -> Provedor {
+    let mut prov = match executar("agy", &["-p", "/quota", "--output-format", "json"], cwd) {
         Ok(saida) => ler_antigravity(&saida),
         Err(e) => provedor_com_erro(e),
+    };
+
+    if let Ok(cfg_texto) = fs::read_to_string(base.join("config.json")) {
+        if let Ok(cfg_json) = serde_json::from_str::<serde_json::Value>(&cfg_texto) {
+            if let Some(cfg_creditos) = ConfigCreditosGcp::de_json(cfg_json.get("creditos_gcp")) {
+                let gasto_incremental = crate::platform::pasta_usuario()
+                    .map(|h| h.join(".gemini").join("antigravity-cli").join("brain"))
+                    .map(|p| {
+                        calcular_gasto_argon_incremental(
+                            &p,
+                            cfg_creditos.data_inicio,
+                            cfg_creditos.cotacao_usd,
+                        )
+                    })
+                    .unwrap_or(0.0);
+
+                let grupo = criar_grupo_creditos_gcp(&cfg_creditos, gasto_incremental);
+                if prov.grupos.is_empty() {
+                    prov.erro = None;
+                }
+                if let Some(pos) = prov.grupos.iter().position(|g| g.nome.contains("Argon")) {
+                    prov.grupos.insert(pos + 1, grupo);
+                } else {
+                    prov.grupos.insert(0, grupo);
+                }
+            }
+        }
     }
+
+    prov
 }
 
 /// Mantém stdin aberto até a resposta e completa o handshake antes da consulta.
@@ -625,6 +814,7 @@ fn provedor_para_json(p: &Provedor) -> serde_json::Value {
                 "rotulo": j.rotulo,
                 "usado": j.usado,
                 "renova": j.renova,
+                "detalhe": j.detalhe,
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
     })
@@ -639,6 +829,7 @@ fn provedor_de_json(v: &serde_json::Value) -> Option<Provedor> {
                 rotulo: j.get("rotulo")?.as_str()?.to_string(),
                 usado: j.get("usado")?.as_u64()? as u32,
                 renova: j.get("renova").and_then(|r| r.as_i64()),
+                detalhe: j.get("detalhe").and_then(|d| d.as_str()).map(String::from),
             });
         }
         grupos.push(Grupo {
@@ -678,11 +869,29 @@ pub fn ler_cache(base: &Path) -> Option<Cotas> {
     })
 }
 
-pub fn fresca(cotas: &Cotas) -> bool {
-    cotas.claude.erro.is_none()
-        && cotas.antigravity.erro.is_none()
-        && cotas.chatgpt.erro.is_none()
-        && Local::now().timestamp() - cotas.lido_em < VALIDADE_SEG
+pub fn fresca(base: &Path, cotas: &Cotas) -> bool {
+    if cotas.claude.erro.is_some()
+        || cotas.antigravity.erro.is_some()
+        || cotas.chatgpt.erro.is_some()
+        || Local::now().timestamp() - cotas.lido_em >= VALIDADE_SEG
+    {
+        return false;
+    }
+    if let Ok(cfg_texto) = fs::read_to_string(base.join("config.json")) {
+        if let Ok(cfg_json) = serde_json::from_str::<serde_json::Value>(&cfg_texto) {
+            if ConfigCreditosGcp::de_json(cfg_json.get("creditos_gcp")).is_some() {
+                let tem_creditos = cotas
+                    .antigravity
+                    .grupos
+                    .iter()
+                    .any(|g| g.nome.contains("Argon (API GCP)"));
+                if !tem_creditos {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }
 
 /// Consulta as três CLIs em paralelo e grava o resultado.
@@ -691,7 +900,7 @@ pub fn atualizar(base: &Path) -> Cotas {
     let _ = fs::create_dir_all(&cwd);
     let (claude, antigravity, chatgpt) = thread::scope(|s| {
         let c = s.spawn(|| buscar_claude(&cwd));
-        let a = s.spawn(|| buscar_antigravity(&cwd));
+        let a = s.spawn(|| buscar_antigravity(base, &cwd));
         let g = s.spawn(|| buscar_chatgpt(&cwd));
         (
             c.join()
@@ -715,11 +924,12 @@ pub fn atualizar(base: &Path) -> Cotas {
 /// Usa o cache se ainda vale; senão consulta de novo.
 pub fn obter(base: &Path) -> Cotas {
     match ler_cache(base) {
-        Some(c) if fresca(&c) => c,
+        Some(c) if fresca(base, &c) => c,
         _ => atualizar(base),
     }
 }
 
+#[allow(dead_code)]
 fn formatar_renovacao(renova: i64, agora: DateTime<Local>) -> String {
     let Some(quando) = Local.timestamp_opt(renova, 0).single() else {
         return String::new();
@@ -743,13 +953,26 @@ fn cor_nivel(usado: u32) -> &'static str {
     }
 }
 
+fn formatar_renovacao_curta(renova: i64, agora: DateTime<Local>) -> String {
+    let Some(quando) = Local.timestamp_opt(renova, 0).single() else {
+        return String::new();
+    };
+    if quando <= agora {
+        "renov".to_string()
+    } else if quando.date_naive() == agora.date_naive() {
+        quando.format("%H:%M").to_string()
+    } else {
+        quando.format("%d/%m").to_string()
+    }
+}
+
 fn barra(usado: u32) -> String {
-    let cheio = (usado.min(100) as usize * 10) / 100;
+    let cheio = (usado.min(100) as usize * 8) / 100;
     let cor = cor_nivel(usado);
     format!(
         "{cor}[{}{RESET}{}{cor}]{RESET}",
         "█".repeat(cheio),
-        "░".repeat(10 - cheio)
+        "░".repeat(8 - cheio)
     )
 }
 
@@ -757,78 +980,267 @@ fn linha(conteudo: &str) -> String {
     format!("│ {} │", alinhar(conteudo, LARGURA_CARD))
 }
 
-fn cabecalho(nome: &str, cor: &str, legenda: &str) -> String {
+fn cabecalho_coluna(nome: &str, cor: &str, largura: usize) -> String {
     let esquerda = format!("{NEGRITO}{cor}{nome}{RESET}");
-    let espaco = LARGURA_CARD.saturating_sub(largura_visivel(&esquerda) + legenda.chars().count());
-    linha(&format!(
-        "{esquerda}{}{FRACO}{legenda}{RESET}",
-        " ".repeat(espaco)
-    ))
+    let legenda = "% usado";
+    let vis_esq = largura_visivel(&esquerda);
+    let vis_leg = legenda.chars().count();
+    let espaco = largura.saturating_sub(vis_esq + vis_leg);
+    format!("{esquerda}{}{FRACO}{legenda}{RESET}", " ".repeat(espaco))
 }
 
-fn linhas_provedor(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
+fn format_item_coluna(rotulo: &str, j: &Janela, agora: DateTime<Local>) -> String {
+    let mut direita = match &j.detalhe {
+        Some(d) => {
+            if let Some(pos) = d.find(',') {
+                d[..pos].trim().to_string()
+            } else if let Some(pos) = d.find('.') {
+                d[..pos].trim().to_string()
+            } else {
+                d.clone()
+            }
+        }
+        None => j
+            .renova
+            .map(|r| format!("↻ {}", formatar_renovacao_curta(r, agora)))
+            .unwrap_or_default(),
+    };
+    if direita.chars().count() > 7 {
+        direita = direita.chars().take(7).collect();
+    }
+    let espaco_dir = format!("{:<7}", direita);
+    format!(
+        "{:<10} {} {}{:>3}%{RESET} {FRACO}{espaco_dir}{RESET}",
+        rotulo,
+        barra(j.usado),
+        cor_nivel(j.usado),
+        j.usado
+    )
+}
+
+fn colunas_claude(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
     if let Some(erro) = &p.erro {
-        let curto: String = erro.chars().take(LARGURA_CARD - 2).collect();
-        return vec![linha(&format!("  {FRACO}{curto}{RESET}"))];
+        let curto: String = erro.chars().take(COL_LARGURA).collect();
+        return vec![format!(
+            "{FRACO}{:<largura$}{RESET}",
+            curto,
+            largura = COL_LARGURA
+        )];
     }
     let mut linhas = Vec::new();
     if let Some(instante) = p
         .historico_em
         .and_then(|t| Local.timestamp_opt(t, 0).single())
     {
-        linhas.push(linha(&format!(
-            "{FRACO}Histórico de {}{RESET}",
-            instante.format("%d/%m %H:%M")
-        )));
+        linhas.push(format!(
+            "{FRACO}Histórico de {:<largura$}{RESET}",
+            instante.format("%d/%m %H:%M"),
+            largura = COL_LARGURA.saturating_sub(13)
+        ));
     }
     for g in &p.grupos {
-        if !g.nome.is_empty() {
-            linhas.push(linha(&g.nome));
-        }
         for j in &g.janelas {
-            let renova = j
-                .renova
-                .map(|r| format!("↻ {}", formatar_renovacao(r, agora)))
-                .unwrap_or_default();
-            linhas.push(linha(&format!(
-                "  {:<11} {} {}{:>3}%{RESET}  {FRACO}{renova}{RESET}",
-                j.rotulo,
-                barra(j.usado),
-                cor_nivel(j.usado),
-                j.usado
-            )));
+            linhas.push(format_item_coluna(&j.rotulo, j, agora));
         }
     }
     linhas
 }
 
-/// Card da direita do painel; sem leitura ainda, avisa que está lendo.
+fn colunas_antigravity(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
+    if let Some(erro) = &p.erro {
+        let curto: String = erro.chars().take(COL_LARGURA).collect();
+        return vec![format!(
+            "{FRACO}{:<largura$}{RESET}",
+            curto,
+            largura = COL_LARGURA
+        )];
+    }
+    let mut linhas = Vec::new();
+    if let Some(instante) = p
+        .historico_em
+        .and_then(|t| Local.timestamp_opt(t, 0).single())
+    {
+        linhas.push(format!(
+            "{FRACO}Histórico de {:<largura$}{RESET}",
+            instante.format("%d/%m %H:%M"),
+            largura = COL_LARGURA.saturating_sub(13)
+        ));
+    }
+
+    // 1. Argon Assinatura
+    if let Some(g_argon) = p
+        .grupos
+        .iter()
+        .find(|g| g.nome.contains("Argon") && !g.nome.contains("API"))
+    {
+        if let Some(j) = g_argon.janelas.first() {
+            linhas.push(format_item_coluna("Argon Sem", j, agora));
+        }
+    }
+
+    // 2. Argon API
+    if let Some(g_api) = p.grupos.iter().find(|g| g.nome.contains("API")) {
+        if let Some(j) = g_api.janelas.first() {
+            linhas.push(format_item_coluna("Argon API", j, agora));
+        }
+    }
+
+    // 3. Flash / Pro
+    if let Some(g_flash) = p.grupos.iter().find(|g| g.nome.contains("Flash")) {
+        let j_5h = g_flash.janelas.iter().find(|j| j.rotulo == "5h");
+        let j_sem = g_flash.janelas.iter().find(|j| j.rotulo == "Semana");
+        if let Some(j) = j_5h {
+            linhas.push(format_item_coluna("Flash 5h", j, agora));
+        }
+        if let Some(j) = j_sem {
+            linhas.push(format_item_coluna("Flash Sem", j, agora));
+        }
+        if j_5h.is_none() && j_sem.is_none() {
+            if let Some(j) = g_flash.janelas.first() {
+                linhas.push(format_item_coluna("Flash/Pro", j, agora));
+            }
+        }
+    }
+
+    // 4. Claude / GPT
+    if let Some(g_claude) = p
+        .grupos
+        .iter()
+        .find(|g| g.nome.contains("Claude") || g.nome.contains("GPT"))
+    {
+        let j = g_claude
+            .janelas
+            .iter()
+            .find(|j| j.rotulo == "Semana")
+            .or_else(|| g_claude.janelas.first());
+        if let Some(j) = j {
+            linhas.push(format_item_coluna("Claude/GPT", j, agora));
+        }
+    }
+
+    // Fallback para outros grupos desconhecidos
+    for g in &p.grupos {
+        let eh_conhecido = g.nome.contains("Argon")
+            || g.nome.contains("Flash")
+            || g.nome.contains("Claude")
+            || g.nome.contains("GPT");
+        if !eh_conhecido && !g.nome.is_empty() {
+            if let Some(j) = g.janelas.first() {
+                let rotulo: String = g.nome.chars().take(10).collect();
+                linhas.push(format_item_coluna(&rotulo, j, agora));
+            }
+        }
+    }
+
+    linhas
+}
+
+fn colunas_chatgpt(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
+    if let Some(erro) = &p.erro {
+        let curto: String = erro.chars().take(COL_LARGURA).collect();
+        return vec![format!(
+            "{FRACO}{:<largura$}{RESET}",
+            curto,
+            largura = COL_LARGURA
+        )];
+    }
+    let mut linhas = Vec::new();
+    if let Some(instante) = p
+        .historico_em
+        .and_then(|t| Local.timestamp_opt(t, 0).single())
+    {
+        linhas.push(format!(
+            "{FRACO}Histórico de {:<largura$}{RESET}",
+            instante.format("%d/%m %H:%M"),
+            largura = COL_LARGURA.saturating_sub(13)
+        ));
+    }
+    for g in &p.grupos {
+        for j in &g.janelas {
+            linhas.push(format_item_coluna(&j.rotulo, j, agora));
+        }
+    }
+    linhas
+}
+
+#[allow(dead_code)]
+fn linhas_provedor(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
+    colunas_claude(p, agora)
+        .into_iter()
+        .map(|l| linha(&l))
+        .collect()
+}
+
+/// Card de cotas dos agentes em formato horizontal de 3 colunas.
 pub fn renderizar_card(cotas: Option<&Cotas>, agora: DateTime<Local>) -> Vec<String> {
-    let mut linhas = vec![format!("╭─{}─╮", "─".repeat(LARGURA_CARD))];
+    let topo = format!(
+        "╭─{}─┬─{}─┬─{}─╮",
+        "─".repeat(COL_LARGURA),
+        "─".repeat(COL_LARGURA),
+        "─".repeat(COL_LARGURA)
+    );
+    let sep = format!(
+        "├─{}─┼─{}─┼─{}─┤",
+        "─".repeat(COL_LARGURA),
+        "─".repeat(COL_LARGURA),
+        "─".repeat(COL_LARGURA)
+    );
+    let base = format!(
+        "╰─{}─┴─{}─┴─{}─╯",
+        "─".repeat(COL_LARGURA),
+        "─".repeat(COL_LARGURA),
+        "─".repeat(COL_LARGURA)
+    );
+
+    let mut linhas = vec![topo];
     match cotas {
-        None => linhas.push(linha(&format!("{FRACO}Lendo as cotas dos agentes…{RESET}"))),
+        None => {
+            linhas.push(linha(&format!("{FRACO}Lendo as cotas dos agentes…{RESET}")));
+        }
         Some(c) => {
-            linhas.push(cabecalho("Claude Code", MAGENTA, "% usado"));
-            linhas.extend(linhas_provedor(&c.claude, agora));
-            linhas.push(format!("├─{}─┤", "─".repeat(LARGURA_CARD)));
-            linhas.push(cabecalho("Antigravity", AZUL, "% usado"));
-            linhas.extend(linhas_provedor(&c.antigravity, agora));
-            linhas.push(format!("├─{}─┤", "─".repeat(LARGURA_CARD)));
-            linhas.push(cabecalho("ChatGPT / Codex", VERDE, "% usado"));
-            linhas.extend(linhas_provedor(&c.chatgpt, agora));
+            let cab1 = cabecalho_coluna("Claude Code", MAGENTA, COL_LARGURA);
+            let cab2 = cabecalho_coluna("Antigravity", AZUL, COL_LARGURA);
+            let cab3 = cabecalho_coluna("ChatGPT / Codex", VERDE, COL_LARGURA);
+            linhas.push(format!("│ {} │ {} │ {} │", cab1, cab2, cab3));
+            linhas.push(sep);
+
+            let mut col1 = colunas_claude(&c.claude, agora);
+            let col2 = colunas_antigravity(&c.antigravity, agora);
+            let mut col3 = colunas_chatgpt(&c.chatgpt, agora);
+
             let lido = Local
                 .timestamp_opt(c.lido_em, 0)
                 .single()
                 .map(|d| format!("lido às {}", d.format("%H:%M")))
                 .unwrap_or_default();
-            let espaco = LARGURA_CARD.saturating_sub(lido.chars().count());
-            linhas.push(linha(&format!(
-                "{}{FRACO}{lido}{RESET}",
-                " ".repeat(espaco)
-            )));
+
+            let total_linhas = col1.len().max(col2.len()).max(col3.len()).max(4);
+
+            while col1.len() < total_linhas {
+                col1.push(" ".repeat(COL_LARGURA));
+            }
+            while col3.len() < total_linhas.saturating_sub(1) {
+                col3.push(" ".repeat(COL_LARGURA));
+            }
+            if col3.len() < total_linhas {
+                let espaco = COL_LARGURA.saturating_sub(lido.chars().count());
+                col3.push(format!("{}{FRACO}{lido}{RESET}", " ".repeat(espaco)));
+            }
+
+            for i in 0..total_linhas {
+                let l1 = col1.get(i).map(String::as_str).unwrap_or("");
+                let l2 = col2.get(i).map(String::as_str).unwrap_or("");
+                let l3 = col3.get(i).map(String::as_str).unwrap_or("");
+                linhas.push(format!(
+                    "│ {} │ {} │ {} │",
+                    alinhar(l1, COL_LARGURA),
+                    alinhar(l2, COL_LARGURA),
+                    alinhar(l3, COL_LARGURA)
+                ));
+            }
         }
     }
-    linhas.push(format!("╰─{}─╯", "─".repeat(LARGURA_CARD)));
+    linhas.push(base);
     linhas
 }
 
@@ -1126,7 +1538,55 @@ sys.stdin.read()
             chatgpt: ler_chatgpt(CHATGPT),
             lido_em: Local::now().timestamp(),
         };
-        assert!(!fresca(&cotas));
+        assert!(!fresca(Path::new("."), &cotas));
+    }
+
+    #[test]
+    fn test_cache_sem_creditos_fica_invalido_quando_configurado() {
+        let pasta = std::env::temp_dir().join(format!("voz-fresca-{}", std::process::id()));
+        fs::create_dir_all(&pasta).unwrap();
+        fs::write(
+            pasta.join("config.json"),
+            serde_json::json!({
+                "creditos_gcp": {
+                    "ativo": true,
+                    "total": 400.0,
+                    "usado_inicial": 10.0
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let cotas_sem_creditos = Cotas {
+            claude: ler_claude(USAGE, em(2026, 10, 29, 4, 20)),
+            antigravity: ler_antigravity(QUOTA),
+            chatgpt: ler_chatgpt(CHATGPT),
+            lido_em: Local::now().timestamp(),
+        };
+
+        assert!(!fresca(&pasta, &cotas_sem_creditos));
+
+        let mut agy = ler_antigravity(QUOTA);
+        let cfg = ConfigCreditosGcp {
+            ativo: true,
+            total: 400.0,
+            usado_inicial: 10.0,
+            moeda: "R$".to_string(),
+            cotacao_usd: 5.8,
+            data_inicio: 0,
+        };
+        agy.grupos.push(criar_grupo_creditos_gcp(&cfg, 0.0));
+        let cotas_com_creditos = Cotas {
+            claude: ler_claude(USAGE, em(2026, 10, 29, 4, 20)),
+            antigravity: agy,
+            chatgpt: ler_chatgpt(CHATGPT),
+            lido_em: Local::now().timestamp(),
+        };
+
+        assert!(fresca(&pasta, &cotas_com_creditos));
+
+        let _ = fs::remove_dir_all(&pasta);
     }
 
     #[test]
@@ -1160,5 +1620,125 @@ sys.stdin.read()
                 "linhas com larguras diferentes: {card:#?}"
             );
         }
+    }
+
+    #[test]
+    fn test_config_creditos_gcp_de_json() {
+        assert_eq!(ConfigCreditosGcp::de_json(None), None);
+
+        let desativado = serde_json::json!({"ativo": false});
+        assert_eq!(ConfigCreditosGcp::de_json(Some(&desativado)), None);
+
+        let cfg_json = serde_json::json!({
+            "ativo": true,
+            "total": 413.28,
+            "usado_inicial": 14.69,
+            "moeda": "R$",
+            "cotacao_usd": 5.871,
+            "data_inicio": "2026-11-02T11:45:00Z"
+        });
+        let cfg = ConfigCreditosGcp::de_json(Some(&cfg_json)).unwrap();
+        assert!(cfg.ativo);
+        assert_eq!(cfg.total, 413.28);
+        assert_eq!(cfg.usado_inicial, 14.69);
+        assert_eq!(cfg.moeda, "R$");
+        assert_eq!(cfg.cotacao_usd, 5.871);
+        assert!(cfg.data_inicio > 0);
+    }
+
+    #[test]
+    fn test_criar_grupo_creditos_gcp_calcula_saldo_e_detalhe() {
+        let cfg = ConfigCreditosGcp {
+            ativo: true,
+            total: 413.28,
+            usado_inicial: 14.69,
+            moeda: "R$".to_string(),
+            cotacao_usd: 5.871,
+            data_inicio: 1_790_000_000,
+        };
+        let grupo = criar_grupo_creditos_gcp(&cfg, 0.0);
+        assert_eq!(grupo.nome, "Gemini 4 Argon (API GCP)");
+        assert_eq!(grupo.janelas.len(), 1);
+        let j = &grupo.janelas[0];
+        assert_eq!(j.rotulo, "Créditos");
+        assert_eq!(j.usado, 4);
+        assert_eq!(j.renova, None);
+        assert_eq!(j.detalhe.as_deref(), Some("R$ 398,59 livre"));
+    }
+
+    #[test]
+    fn test_calcular_gasto_argon_incremental_com_transcripts() {
+        let pasta = std::env::temp_dir().join(format!("voz-brain-test-{}", std::process::id()));
+        let logs_dir = pasta
+            .join("sessao-1")
+            .join(".system_generated")
+            .join("logs");
+        fs::create_dir_all(&logs_dir).unwrap();
+
+        let t1 = "2026-11-02T12:00:00Z";
+        let t0 = "2026-11-01T12:00:00Z";
+
+        let l1 = serde_json::json!({
+            "type": "PLANNER_RESPONSE",
+            "created_at": t1,
+            "input_tokens": 100_000,
+            "output_tokens": 10_000,
+            "cache_read_tokens": 0
+        })
+        .to_string();
+
+        let l0 = serde_json::json!({
+            "type": "PLANNER_RESPONSE",
+            "created_at": t0,
+            "input_tokens": 500_000,
+            "output_tokens": 50_000,
+            "cache_read_tokens": 0
+        })
+        .to_string();
+
+        fs::write(logs_dir.join("transcript.jsonl"), format!("{l0}\n{l1}\n")).unwrap();
+
+        let dt_inicio = DateTime::parse_from_rfc3339("2026-11-02T11:45:00Z")
+            .unwrap()
+            .timestamp();
+
+        let gasto = calcular_gasto_argon_incremental(&pasta, dt_inicio, 5.0);
+        assert!((gasto - 1.50).abs() < 0.001);
+
+        let _ = fs::remove_dir_all(&pasta);
+    }
+
+    #[test]
+    fn test_card_com_creditos_gcp_tem_largura_constante() {
+        let agora = em(2026, 11, 2, 12, 0);
+        let cfg = ConfigCreditosGcp {
+            ativo: true,
+            total: 413.28,
+            usado_inicial: 14.69,
+            moeda: "R$".to_string(),
+            cotacao_usd: 5.871,
+            data_inicio: 1_790_000_000,
+        };
+        let mut agy = ler_antigravity(QUOTA);
+        agy.grupos.insert(0, criar_grupo_creditos_gcp(&cfg, 0.0));
+
+        let cotas = Cotas {
+            claude: ler_claude(USAGE, agora),
+            antigravity: agy,
+            chatgpt: ler_chatgpt(CHATGPT),
+            lido_em: agora.timestamp(),
+        };
+
+        let card = renderizar_card(Some(&cotas), agora);
+        let larguras: HashSet<usize> = card.iter().map(|l| largura_visivel(l)).collect();
+        assert_eq!(
+            larguras.len(),
+            1,
+            "largura inconsistente com créditos: {card:#?}"
+        );
+        assert!(card.iter().any(|l| l.contains("Flash 5h")));
+        assert!(card.iter().any(|l| l.contains("Flash Sem")));
+        assert!(card.iter().any(|l| l.contains("Argon Sem")));
+        assert!(card.iter().any(|l| l.contains("Argon API")));
     }
 }

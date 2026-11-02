@@ -618,7 +618,7 @@ pub fn rodar_painel(base: &Path, apenas_ativos: bool, watch: Option<f64>) {
         thread::spawn(move || loop {
             // Outro painel aberto pode ter atualizado o cache em disco.
             let leitura = match crate::cotas::ler_cache(&base_cotas) {
-                Some(c) if crate::cotas::fresca(&c) => c,
+                Some(c) if crate::cotas::fresca(&base_cotas, &c) => c,
                 _ => crate::cotas::atualizar(&base_cotas),
             };
             *cotas_clone.lock().unwrap() = Some(leitura);
