@@ -60,7 +60,9 @@ pub fn montar_fala(base: &Path, projeto: &str, pedido: &str, resposta: &str) -> 
     match crate::resumo::resumir(&gemini, palavras, projeto, pedido, resposta, 20) {
         Ok(fala) => fala,
         Err(e) => {
-            eprintln!("[voz] resumo indisponível ({e}); lendo o começo da resposta.");
+            if std::env::var("VOZ_DEBUG").is_ok() {
+                eprintln!("[voz] resumo indisponível ({e}); lendo o começo da resposta.");
+            }
             extrair_resumo_direto(resposta, projeto, palavras)
         }
     }

@@ -79,6 +79,11 @@ fn chamar(
     corpo: &serde_json::Value,
     timeout_seg: u64,
 ) -> Result<String, String> {
+    if modelo.to_lowercase().contains("argon") {
+        return Err(format!(
+            "uso do modelo {modelo} bloqueado para narração ou resumo"
+        ));
+    }
     let agente: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(timeout_seg)))
         .http_status_as_error(false)
@@ -112,6 +117,9 @@ pub fn resumir(
     resposta: &str,
     timeout_seg: u64,
 ) -> Result<String, String> {
+    if cfg.modelo_resumo.to_lowercase().contains("argon") {
+        return Err("uso do modelo Argon bloqueado para narração ou resumo".to_string());
+    }
     let chave = crate::gemini::chave()?;
     let corpo = corpo_pedido(palavras, projeto, pedido, resposta, "minimal");
     match chamar(&cfg.modelo_resumo, &chave, &corpo, timeout_seg) {
@@ -170,5 +178,13 @@ mod tests {
     fn test_instrucao_contem_diretriz_de_contexto_tecnico() {
         let texto = instrucao(40);
         assert!(texto.contains("contexto técnico objetivo"));
+    }
+
+    #[test]
+    fn test_chamar_bloqueia_modelo_argon() {
+        let corpo = serde_json::json!({});
+        let resultado = chamar("gemini-4-argon", "chave-teste", &corpo, 5);
+        assert!(resultado.is_err());
+        assert!(resultado.unwrap_err().contains("bloqueado"));
     }
 }

@@ -157,6 +157,138 @@ done
 PYTHON_BIN="$(command -v python3 || command -v python || echo "/usr/bin/python3")"
 "$PYTHON_BIN" "$DESTINO/scripts/instalar_hooks.py" --destino "$DESTINO"
 
+AGY_ENCONTRADO=0
+AGY_BIN_PATH=""
+if [ -x "$BIN_DIR/agy" ] || [ -x "$BIN_DIR/agy-bin" ]; then
+  AGY_BIN_PATH="$BIN_DIR/agy"
+  AGY_ENCONTRADO=1
+elif command -v agy >/dev/null 2>&1; then
+  AGY_BIN_PATH="$(command -v agy)"
+  AGY_ENCONTRADO=1
+fi
+
+if [ "$AGY_ENCONTRADO" -eq 1 ]; then
+  echo "==> Configurando wrapper do Antigravity CLI (agy) com suporte a --api e --oauth..."
+  if [ -f "$BIN_DIR/agy" ] && [ ! -f "$BIN_DIR/agy-bin" ]; then
+    if head -n 1 "$BIN_DIR/agy" 2>/dev/null | grep -qv '^#!'; then
+      mv "$BIN_DIR/agy" "$BIN_DIR/agy-bin"
+    fi
+  elif [ ! -f "$BIN_DIR/agy-bin" ] && [ -n "$AGY_BIN_PATH" ] && [ "$AGY_BIN_PATH" != "$BIN_DIR/agy" ]; then
+    cp "$AGY_BIN_PATH" "$BIN_DIR/agy-bin"
+  fi
+
+  if [ -f "$BIN_DIR/agy-bin" ]; then
+    cat << 'EOF' > "$BIN_DIR/agy"
+#!/bin/bash
+set -e
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+REAL_BIN="$DIR/agy-bin"
+
+if [ ! -x "$REAL_BIN" ]; then
+  echo "Erro: Binário $REAL_BIN não encontrado." >&2
+  exit 1
+fi
+
+args=()
+settings_args=()
+use_api=0
+use_oauth=0
+has_settings=0
+settings_val=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --api)
+      use_api=1
+      shift
+      ;;
+    --oauth)
+      use_oauth=1
+      shift
+      ;;
+    --settings)
+      has_settings=1
+      settings_val="$2"
+      shift 2
+      ;;
+    --settings=*)
+      has_settings=1
+      settings_val="${1#*=}"
+      shift
+      ;;
+    *)
+      args+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [ "$use_api" -eq 1 ]; then
+  if [ -z "${GEMINI_API_KEY:-}" ]; then
+    if command -v security >/dev/null 2>&1; then
+      key=$(security find-generic-password -s gemini-api-key -w 2>/dev/null || true)
+      key=$(echo "$key" | tr -d '\r\n')
+      if [ -n "$key" ]; then
+        export GEMINI_API_KEY="$key"
+      fi
+    elif [ -f "$HOME/.config/voz/gemini-api-key" ]; then
+      export GEMINI_API_KEY="$(cat "$HOME/.config/voz/gemini-api-key" 2>/dev/null | tr -d '\r\n')"
+    elif command -v secret-tool >/dev/null 2>&1; then
+      key=$(secret-tool lookup service gemini-api-key 2>/dev/null || true)
+      if [ -n "$key" ]; then
+        export GEMINI_API_KEY="$key"
+      fi
+    fi
+  fi
+
+  if [ -z "${GEMINI_API_KEY:-}" ]; then
+    echo "Erro: Nenhuma chave de API encontrada em GEMINI_API_KEY ou no Keychain/cofre (serviço gemini-api-key)." >&2
+    exit 1
+  fi
+
+  if [ "$has_settings" -eq 1 ]; then
+    merged_settings=$(python3 -c '
+import sys, json
+try:
+    data = json.loads(sys.argv[1])
+except Exception:
+    data = {}
+data["modelProvider"] = "gemini"
+print(json.dumps(data))
+' "$settings_val" 2>/dev/null || echo "$settings_val")
+    settings_args=(--settings "$merged_settings")
+  else
+    settings_args=(--settings '{"modelProvider":"gemini"}')
+  fi
+elif [ "$use_oauth" -eq 1 ]; then
+  if [ "$has_settings" -eq 1 ]; then
+    merged_settings=$(python3 -c '
+import sys, json
+try:
+    data = json.loads(sys.argv[1])
+except Exception:
+    data = {}
+data["modelProvider"] = ""
+print(json.dumps(data))
+' "$settings_val" 2>/dev/null || echo "$settings_val")
+    settings_args=(--settings "$merged_settings")
+  else
+    settings_args=(--settings '{"modelProvider":""}')
+  fi
+else
+  if [ "$has_settings" -eq 1 ]; then
+    settings_args=(--settings "$settings_val")
+  fi
+fi
+
+exec "$REAL_BIN" "${settings_args[@]}" "${args[@]}"
+EOF
+    chmod +x "$BIN_DIR/agy"
+    echo "==> Wrapper do agy instalado com sucesso em $BIN_DIR/agy."
+  fi
+fi
+
 echo ""
 if [ "$SO" = "Darwin" ]; then
   echo "==> Configuração de Chaves de API (macOS Keychain ou Variável de Ambiente):"
@@ -211,6 +343,10 @@ else
   fi
 
   echo "    [✓] Síntese offline (speech-dispatcher / espeak-ng): pronta para uso offline sem chaves."
+fi
+
+if [ -f "$BIN_DIR/agy-bin" ] && [ -x "$BIN_DIR/agy" ]; then
+  echo "    [✓] Antigravity CLI (agy): wrapper ativo com suporte a --api e --oauth."
 fi
 
 echo ""

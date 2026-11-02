@@ -82,10 +82,12 @@ pub fn sintetizar_em_stream(
             let corpo = resposta.body_mut().read_to_string().unwrap_or_default();
             let motivo: String = corpo.chars().take(300).collect();
             ultimo_erro = format!("HTTP {} na OpenAI: {motivo}", status.as_u16());
-            eprintln!(
-                "[voz] OpenAI indisponível (HTTP {}); tentando próximo da cascata.",
-                status.as_u16()
-            );
+            if std::env::var("VOZ_DEBUG").is_ok() {
+                eprintln!(
+                    "[voz] OpenAI indisponível (HTTP {}); tentando próximo da cascata.",
+                    status.as_u16()
+                );
+            }
             continue;
         }
 

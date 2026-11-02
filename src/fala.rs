@@ -118,7 +118,9 @@ pub fn falar(base: &Path, texto: &str, timeout_seg: u64) {
             outro => {
                 drop(envia);
                 let _ = tocador.join();
-                eprintln!("[voz] provedor desconhecido: {outro}");
+                if std::env::var("VOZ_DEBUG").is_ok() {
+                    eprintln!("[voz] provedor desconhecido: {outro}");
+                }
                 continue;
             }
         };
@@ -130,14 +132,20 @@ pub fn falar(base: &Path, texto: &str, timeout_seg: u64) {
             Ok(()) if tocou => return,
             // Parou no meio: repetir a frase inteira no say soaria pior que o corte.
             Err(e) if tocou => {
-                eprintln!("[voz] o stream de {prov} parou no meio ({e}).");
+                if std::env::var("VOZ_DEBUG").is_ok() {
+                    eprintln!("[voz] o stream de {prov} parou no meio ({e}).");
+                }
                 return;
             }
             Err(e) => {
-                eprintln!("[voz] {prov} indisponível ({e}); tentando próximo provedor.");
+                if std::env::var("VOZ_DEBUG").is_ok() {
+                    eprintln!("[voz] {prov} indisponível ({e}); tentando próximo provedor.");
+                }
             }
             Ok(()) => {
-                eprintln!("[voz] saída de áudio indisponível para {prov}.");
+                if std::env::var("VOZ_DEBUG").is_ok() {
+                    eprintln!("[voz] saída de áudio indisponível para {prov}.");
+                }
             }
         }
     }
