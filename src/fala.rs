@@ -1,6 +1,7 @@
 //! Fala em voz alta. O Gemini manda o áudio em streaming e a fala começa no
 //! primeiro pedaço, sem esperar o resto; sem chave, sem rede ou com a cota
-//! esgotada, quem fala é o `say` do macOS. Nenhum áudio é gravado em disco.
+//! esgotada, quem fala é a voz de reserva local do sistema operacional. Nenhum
+//! áudio é gravado em disco.
 
 use std::fs;
 use std::path::Path;
@@ -141,7 +142,7 @@ pub fn falar(base: &Path, texto: &str, timeout_seg: u64) {
         }
     }
 
-    // Se todos os provedores em nuvem falharem, aciona a reserva local do macOS (Siri Natural Voz 2)
+    // Se todos os provedores em nuvem falharem, aciona a reserva local do sistema operacional
     audio::dizer(base, &ajustar_fonetica(texto, &carregar_regras(base, true)));
 }
 

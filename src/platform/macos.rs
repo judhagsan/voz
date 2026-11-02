@@ -6,13 +6,23 @@ use std::process::Command;
 pub const VOZ_RESERVA_PADRAO: &str = "Voz 2";
 
 pub fn ler_segredo(servico: &str) -> Result<String, String> {
+    // 1. Variável de ambiente (ex: GEMINI_API_KEY)
+    let env_var = servico.to_uppercase().replace('-', "_");
+    if let Ok(val) = std::env::var(&env_var) {
+        let trimmed = val.trim().to_string();
+        if !trimmed.is_empty() {
+            return Ok(trimmed);
+        }
+    }
+
+    // 2. Keychain do macOS
     let saida = Command::new("security")
         .args(["find-generic-password", "-s", servico, "-w"])
         .output()
         .map_err(|e| e.to_string())?;
     let chave = String::from_utf8_lossy(&saida.stdout).trim().to_string();
     if chave.is_empty() {
-        return Err(format!("sem chave no Keychain ({servico})"));
+        return Err(format!("sem chave configurada ({servico})"));
     }
     Ok(chave)
 }
