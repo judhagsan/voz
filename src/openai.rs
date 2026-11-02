@@ -47,7 +47,7 @@ pub fn sintetizar_em_stream(
 ) -> Result<(), String> {
     let chaves = keychain::chaves(SERVICO_CHAVE);
     if chaves.is_empty() {
-        return Err(format!("sem chave no Keychain ({SERVICO_CHAVE})"));
+        return Err(format!("sem chave configurada ({SERVICO_CHAVE})"));
     }
 
     const ENDPOINT: &str = "https://api.openai.com/v1/audio/speech";

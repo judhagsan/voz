@@ -1,11 +1,12 @@
 //! Síntese de voz pela API do Gemini, em streaming.
 //!
-//! A chave fica no Keychain do macOS (serviço `gemini-api-key`), nunca em
-//! arquivo do repositório. O áudio chega em pedaços (eventos `step.delta` de
-//! um stream SSE) como PCM de 16 bits, mono, a 24 kHz, e cada pedaço é
-//! entregue assim que chega, para a fala começar antes de o texto todo estar
-//! pronto. O idioma é detectado pelo próprio texto; o sotaque e o tom vêm do
-//! campo `estilo`, escrito em linguagem natural.
+//! A chave é configurada via variável de ambiente (ex: `GEMINI_API_KEY`) ou no
+//! cofre de senhas do sistema (serviço `gemini-api-key`), nunca em arquivo do
+//! repositório. O áudio chega em pedaços (eventos `step.delta` de um stream SSE)
+//! como PCM de 16 bits, mono, a 24 kHz, e cada pedaço é entregue assim que
+//! chega, para a fala começar antes de o texto todo estar pronto. O idioma é
+//! detectado pelo próprio texto; o sotaque e o tom vêm do campo `estilo`,
+//! escrito em linguagem natural.
 
 use base64::Engine;
 use std::io::{BufRead, BufReader};
@@ -150,7 +151,7 @@ pub fn sintetizar_em_stream(
 ) -> Result<(), String> {
     let chaves = chaves();
     if chaves.is_empty() {
-        return Err(format!("sem chave no Keychain ({SERVICO_CHAVE})"));
+        return Err(format!("sem chave configurada ({SERVICO_CHAVE})"));
     }
 
     let palavras = texto.split_whitespace().count() as u64;

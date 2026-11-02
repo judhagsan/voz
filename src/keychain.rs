@@ -40,4 +40,13 @@ mod tests {
         let lista = chaves("chave-que-certamente-nao-existe-12345");
         assert!(lista.is_empty());
     }
+
+    #[test]
+    fn test_chave_via_variavel_ambiente() {
+        let nome_env = "TEST_SERVICO_API_KEY";
+        std::env::set_var(nome_env, "chave-secreta-env");
+        let resultado = ler_chave("test-servico-api-key");
+        std::env::remove_var(nome_env);
+        assert_eq!(resultado, Ok("chave-secreta-env".to_string()));
+    }
 }
