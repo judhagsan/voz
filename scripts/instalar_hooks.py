@@ -96,7 +96,8 @@ def configurar_claude(dados, voz_sh):
 def configurar_antigravity(dados, voz_sh):
     comando = shlex.quote(str(voz_sh))
     dados["voz"] = {
-        "PreToolUse": [{"matcher": "run_command|ask_question", "hooks": [{"type": "command", "command": f"{comando} --agy permissao"}]}],
+        "PreInvocation": [{"type": "command", "command": f"{comando} --agy pre-invocation"}],
+        "PreToolUse": [{"matcher": "run_command|write_file|edit_file|ask_question", "hooks": [{"type": "command", "command": f"{comando} --agy permissao"}]}],
         "PostToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": f"{comando} --agy pos-tool"}]}],
         "Stop": [{"type": "command", "command": f"{comando} --agy terminei"}],
     }
