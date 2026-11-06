@@ -40,9 +40,9 @@
   "creditos_gcp": {
     "ativo": true,
     "total": 413.28,
-    "usado_inicial": 14.69,
+    "usado_inicial": 274.13,
     "moeda": "R$",
     "cotacao_usd": 5.871,
-    "data_inicio": "2026-11-02T11:45:00Z"
+    "data_inicio": "2026-11-06T16:33:44Z"
   }
 }
