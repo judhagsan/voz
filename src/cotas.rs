@@ -635,9 +635,9 @@ pub fn calcular_gasto_argon_incremental(
         }
     }
 
-    let custo_usd = (total_in as f64 / 1_000_000.0 * 2.0)
-        + (total_out as f64 / 1_000_000.0 * 10.0)
-        + (total_cache as f64 / 1_000_000.0 * 0.10);
+    let custo_usd = (total_in as f64 / 1_000_000.0 * 1.25)
+        + (total_out as f64 / 1_000_000.0 * 5.0)
+        + (total_cache as f64 / 1_000_000.0 * 0.065);
 
     custo_usd * cotacao_usd
 }
@@ -1703,7 +1703,7 @@ sys.stdin.read()
             .timestamp();
 
         let gasto = calcular_gasto_argon_incremental(&pasta, dt_inicio, 5.0);
-        assert!((gasto - 1.50).abs() < 0.001);
+        assert!((gasto - 0.875).abs() < 0.001);
 
         let _ = fs::remove_dir_all(&pasta);
     }
