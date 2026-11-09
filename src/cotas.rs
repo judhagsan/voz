@@ -23,6 +23,7 @@ use crate::painel::{
 pub const VALIDADE_SEG: i64 = 120;
 const LIMITE_COMANDO: Duration = Duration::from_secs(40);
 const COL_LARGURA: usize = 34;
+const LARGURA_ROTULO: usize = 10;
 const LARGURA_CARD: usize = COL_LARGURA * 3 + 6;
 const MESES: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -990,6 +991,15 @@ fn cabecalho_coluna(nome: &str, cor: &str, largura: usize) -> String {
 }
 
 fn format_item_coluna(rotulo: &str, j: &Janela, agora: DateTime<Local>) -> String {
+    // Abrevia também rótulos já gravados no cache, como "Semana Fable".
+    let mut rotulo = match rotulo.strip_prefix("Semana ") {
+        Some(modelo) => format!("{modelo} Sem"),
+        None => rotulo.to_string(),
+    };
+    if rotulo.chars().count() > LARGURA_ROTULO {
+        rotulo = rotulo.chars().take(LARGURA_ROTULO - 1).collect();
+        rotulo.push('…');
+    }
     let mut direita = match &j.detalhe {
         Some(d) => {
             if let Some(pos) = d.find(',') {
@@ -1010,7 +1020,7 @@ fn format_item_coluna(rotulo: &str, j: &Janela, agora: DateTime<Local>) -> Strin
     }
     let espaco_dir = format!("{:<7}", direita);
     format!(
-        "{:<10} {} {}{:>3}%{RESET} {FRACO}{espaco_dir}{RESET}",
+        "{:<LARGURA_ROTULO$} {} {}{:>3}%{RESET} {FRACO}{espaco_dir}{RESET}",
         rotulo,
         barra(j.usado),
         cor_nivel(j.usado),
