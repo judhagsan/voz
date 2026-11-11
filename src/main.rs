@@ -2,6 +2,7 @@ mod agy;
 mod audio;
 mod codex;
 mod cotas;
+mod edge;
 mod elevenlabs;
 mod fala;
 mod fonetica;

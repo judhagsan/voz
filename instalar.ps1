@@ -40,6 +40,9 @@ Copy-Item "$Destino\voz.cmd" "$BinDir\voz.cmd" -Force
 Write-Host "==> Registrando hooks nos agentes..."
 python "$Destino\scripts\instalar_hooks.py" --destino "$Destino"
 
+Write-Host "==> Verificando dependências do provedor de voz (edge-tts)..."
+pip install --quiet edge-tts 2>$null
+
 if (Test-Path "$BinDir\agy-bin.exe") {
     Move-Item "$BinDir\agy-bin.exe" "$BinDir\agy.exe" -Force
     if (Test-Path "$BinDir\agy.cmd") {
@@ -48,14 +51,8 @@ if (Test-Path "$BinDir\agy-bin.exe") {
 }
 
 Write-Host ""
-Write-Host "==> Configuração de Chaves de API no Windows:"
-if ($env:GEMINI_API_KEY) {
-    Write-Host "    [✓] Gemini: variável de ambiente GEMINI_API_KEY configurada."
-} else {
-    Write-Host "    [-] Gemini (opcional): https://aistudio.google.com/apikey"
-    Write-Host "        Para configurar de forma permanente no PowerShell, execute:"
-    Write-Host "        [System.Environment]::SetEnvironmentVariable('GEMINI_API_KEY', 'SUA_CHAVE', 'User')"
-}
+Write-Host "==> Configuração de Provedores de Voz no Windows:"
+Write-Host "    [✓] Edge-TTS (Thalita): pronto para uso em alta fidelidade sem chaves de API."
 
 if ($env:ELEVENLABS_API_KEY) {
     Write-Host "    [✓] ElevenLabs: chave configurada."

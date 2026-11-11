@@ -83,7 +83,7 @@ pub fn falar(base: &Path, texto: &str, timeout_seg: u64) {
         })
         .unwrap_or_else(|| {
             vec![
-                "gemini".to_string(),
+                "edge".to_string(),
                 "elevenlabs".to_string(),
                 "openai".to_string(),
             ]
@@ -92,6 +92,19 @@ pub fn falar(base: &Path, texto: &str, timeout_seg: u64) {
     let para_voz = ajustar_fonetica(texto, &carregar_regras(base, false));
 
     for prov in &provedores {
+        if prov == "edge" {
+            let cfg = crate::edge::Config::de_json(cfg_json.get("edge"));
+            match crate::edge::sintetizar_e_tocar(base, &cfg, &para_voz) {
+                Ok(()) => return,
+                Err(e) => {
+                    if std::env::var("VOZ_DEBUG").is_ok() {
+                        eprintln!("[voz] edge indisponível ({e}); tentando próximo provedor.");
+                    }
+                    continue;
+                }
+            }
+        }
+
         let (envia, recebe) = mpsc::channel();
         let base_tocador = base.to_path_buf();
         let tocador = thread::spawn(move || audio::tocar_stream(&base_tocador, recebe));

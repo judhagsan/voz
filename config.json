@@ -1,8 +1,13 @@
 {
   "provedores": [
+    "edge",
     "elevenlabs",
     "openai"
   ],
+  "edge": {
+    "voz": "pt-BR-ThalitaMultilingualNeural",
+    "velocidade": "+0%"
+  },
   "elevenlabs": {
     "modelo": "eleven_turbo_v2_5",
     "voz_id": "21m00Tcm4TlvDq8ikWAM"
@@ -12,7 +17,7 @@
     "voz": "nova"
   },
   "reserva": {
-    "voz": "Voz 2"
+    "voz": "Luciana"
   },
   "frases": {
     "terminei": ["Pronto por aqui, já pode conferir!"],

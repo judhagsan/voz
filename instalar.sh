@@ -157,20 +157,18 @@ done
 PYTHON_BIN="$(command -v python3 || command -v python || echo "/usr/bin/python3")"
 "$PYTHON_BIN" "$DESTINO/scripts/instalar_hooks.py" --destino "$DESTINO"
 
+echo "==> Verificando dependências do provedor de voz (edge-tts)..."
+"$PYTHON_BIN" -m pip install --quiet --break-system-packages edge-tts 2>/dev/null || \
+  "$PYTHON_BIN" -m pip install --quiet edge-tts 2>/dev/null || true
+
 if [ -f "$BIN_DIR/agy-bin" ]; then
   mv "$BIN_DIR/agy-bin" "$BIN_DIR/agy"
 fi
 
 echo ""
 if [ "$SO" = "Darwin" ]; then
-  echo "==> Configuração de Chaves de API (macOS Keychain ou Variável de Ambiente):"
-  if [ -n "${GEMINI_API_KEY:-}" ] || security find-generic-password -s gemini-api-key >/dev/null 2>&1; then
-    echo "    [✓] Gemini: chave configurada."
-  else
-    echo "    [-] Gemini (opcional): https://aistudio.google.com/apikey"
-    echo "        export GEMINI_API_KEY=\"SUA_CHAVE\" (no ~/.zshrc) ou:"
-    echo "        security add-generic-password -a \"$USER\" -s gemini-api-key -w \"SUA_CHAVE\""
-  fi
+  echo "==> Configuração de Provedores de Voz (macOS):"
+  echo "    [✓] Edge-TTS (Thalita): pronto para uso em alta fidelidade sem chaves de API."
 
   if [ -n "${ELEVENLABS_API_KEY:-}" ] || security find-generic-password -s elevenlabs-api-key >/dev/null 2>&1; then
     echo "    [✓] ElevenLabs: chave configurada."
@@ -188,15 +186,10 @@ if [ "$SO" = "Darwin" ]; then
     echo "        security add-generic-password -a \"$USER\" -s openai-api-key -w \"SUA_CHAVE\""
   fi
 
-  echo "    [✓] Siri Natural (macOS 27 - Voz 2): pronta para uso offline sem chaves."
+  echo "    [✓] Voz de reserva nativa (Luciana): pronta para uso offline sem chaves."
 else
-  echo "==> Configuração de Chaves de API (Linux - Variável de Ambiente ou ~/.config/voz/credentials):"
-  if [ -n "${GEMINI_API_KEY:-}" ] || [ -f "$HOME/.config/voz/gemini-api-key" ] || (command -v secret-tool >/dev/null 2>&1 && secret-tool lookup service gemini-api-key >/dev/null 2>&1); then
-    echo "    [✓] Gemini: chave configurada."
-  else
-    echo "    [-] Gemini (opcional): https://aistudio.google.com/apikey"
-    echo "        export GEMINI_API_KEY=\"SUA_CHAVE\" (adicione ao ~/.bashrc ou ~/.zshrc)"
-  fi
+  echo "==> Configuração de Provedores de Voz (Linux):"
+  echo "    [✓] Edge-TTS (Thalita): pronto para uso em alta fidelidade sem chaves de API."
 
   if [ -n "${ELEVENLABS_API_KEY:-}" ] || [ -f "$HOME/.config/voz/elevenlabs-api-key" ] || (command -v secret-tool >/dev/null 2>&1 && secret-tool lookup service elevenlabs-api-key >/dev/null 2>&1); then
     echo "    [✓] ElevenLabs: chave configurada."
