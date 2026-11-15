@@ -3,34 +3,181 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-pub fn limpar_linha(linha: &str) -> String {
-    let re_link = Regex::new(r"\[([^\]]+)\]\([^\)]+\)").unwrap();
-    let sem_links = re_link.replace_all(linha, "$1");
+fn remover_caminhos(texto: &str) -> String {
+    // Reduz caminhos absolutos (2+ segmentos) ou relativos com extensão ao nome do arquivo,
+    // preservando comandos curtos (/usage) e expressões como macOS/Linux.
+    let re = Regex::new(
+        r"(?P<pref>^|[\s(])(?:/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+|(?:[A-Za-z0-9._-]+/)+[A-Za-z0-9._-]+\.[A-Za-z0-9]{1,8})(?:#L?\d+(?:-L?\d+)?)?",
+    )
+    .unwrap();
+    re.replace_all(texto, |caps: &regex::Captures| {
+        let pref = &caps["pref"];
+        let inteiro = caps.get(0).map(|m| m.as_str()).unwrap_or("");
+        let caminho = &inteiro[pref.len()..];
+        let sem_ancora = caminho.split('#').next().unwrap_or(caminho);
+        let nome = sem_ancora
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or(sem_ancora);
+        format!("{pref}{nome}")
+    })
+    .to_string()
+}
 
-    let mut limpo = String::with_capacity(sem_links.len());
-    for c in sem_links.chars() {
-        if !matches!(c, '*' | '_' | '`' | '#' | '~') {
+fn eh_hash_hex(token: &str) -> bool {
+    let primeiro = token.split("..").next().unwrap_or(token);
+    primeiro.bytes().any(|b| b.is_ascii_digit())
+        && primeiro.bytes().any(|b| matches!(b, b'a'..=b'f'))
+}
+
+fn normalizar_underscores(texto: &str) -> String {
+    let chars: Vec<char> = texto.chars().collect();
+    let mut limpo = String::with_capacity(texto.len());
+    for (i, &c) in chars.iter().enumerate() {
+        if c == '_' {
+            let ant = i.checked_sub(1).and_then(|j| chars.get(j)).copied();
+            let prox = chars.get(i + 1).copied();
+            if ant.is_some_and(char::is_alphanumeric) && prox.is_some_and(char::is_alphanumeric) {
+                limpo.push(' ');
+            }
+        } else if !matches!(c, '*' | '`' | '#' | '~') {
             limpo.push(c);
         }
     }
-
-    let re_num = Regex::new(r"^[0-9]+[.)]\s*").unwrap();
-    let sem_num = re_num.replace(&limpo, "");
-
-    let re_bullet = Regex::new(r"^[-*•]\s*").unwrap();
-    let sem_bullet = re_bullet.replace(&sem_num, "");
-
-    sem_bullet.trim().trim_end_matches(':').to_string()
+    limpo
 }
 
-/// Extrai a fala curta da narração diretamente do texto corrido da resposta
-/// final, pulando títulos, tabelas, citações, links soltos e tudo dentro de
-/// blocos de código. Com `max_palavras` > 0, fica nas frases inteiras que cabem
-/// no limite; com 0, lê tudo.
-pub fn extrair_resumo_direto(resposta: &str, projeto: &str, max_palavras: usize) -> String {
+pub fn limpar_linha(linha: &str) -> String {
+    let re_num = Regex::new(r"^[0-9]+[.)]\s*").unwrap();
+    let sem_num_ini = re_num.replace(linha.trim(), "");
+
+    let re_bullet = Regex::new(r"^[-*•]\s*").unwrap();
+    let sem_bullet_ini = re_bullet.replace(&sem_num_ini, "");
+
+    let re_link = Regex::new(r"!?\[([^\]]+)\]\([^\)]+\)").unwrap();
+    let sem_links = re_link.replace_all(&sem_bullet_ini, "$1");
+
+    let re_url = Regex::new(r"(?:https?|file)://[^\s\])>,\x22']+").unwrap();
+    let sem_urls = re_url.replace_all(&sem_links, "");
+
+    let re_diff = Regex::new(r"[+-]\d+\s*/\s*[+-]\d+").unwrap();
+    let sem_diffs = re_diff.replace_all(&sem_urls, "");
+
+    let re_hash = Regex::new(r"\b[0-9a-f]{7,40}(?:\.\.[0-9a-f]{7,40})?\b").unwrap();
+    let sem_hashes = re_hash.replace_all(&sem_diffs, |caps: &regex::Captures| {
+        let token = caps.get(0).map(|m| m.as_str()).unwrap_or("");
+        if eh_hash_hex(token) {
+            String::new()
+        } else {
+            token.to_string()
+        }
+    });
+
+    let sem_caminhos = remover_caminhos(&sem_hashes);
+    let mut sem_simbolos = sem_caminhos
+        .replace(['→', '⇒'], " para ")
+        .replace('·', ", ");
+    sem_simbolos = Regex::new(r"\[[✓xX ]\]|[│─╭╮╰╯├┤┬┴┼]")
+        .unwrap()
+        .replace_all(&sem_simbolos, " ")
+        .to_string();
+
+    let limpo = normalizar_underscores(&sem_simbolos);
+    let sem_num = re_num.replace(&limpo, "");
+    let sem_bullet = re_bullet.replace(&sem_num, "");
+    let sem_parens = Regex::new(r"\(\s*[,;/\-]*\s*\)")
+        .unwrap()
+        .replace_all(&sem_bullet, "");
+    let colapsado = Regex::new(r"\s+")
+        .unwrap()
+        .replace_all(&sem_parens, " ")
+        .to_string();
+    let pontuacao = Regex::new(r"\s+([,.;:!?])")
+        .unwrap()
+        .replace_all(&colapsado, "$1")
+        .to_string();
+
+    pontuacao
+        .trim()
+        .trim_end_matches(':')
+        .trim_matches(|c| matches!(c, '—' | '–' | '-'))
+        .trim()
+        .to_string()
+}
+
+struct LinhaCandidata {
+    texto: String,
+    eh_secao_resumo: bool,
+    eh_intro_lista: bool,
+    eh_fatica: bool,
+    eh_pergunta: bool,
+    palavras: usize,
+}
+
+fn eh_secao_resumo(titulo: &str) -> bool {
+    matches!(
+        titulo.trim().to_lowercase().as_str(),
+        "resumo" | "conclusão" | "conclusao" | "síntese" | "sintese"
+    )
+}
+
+fn eh_abertura_fatica(texto: &str) -> bool {
+    let limpo = texto
+        .trim()
+        .trim_end_matches(['.', '!', ',', ':'])
+        .to_lowercase();
+    matches!(
+        limpo.as_str(),
+        "perfeito"
+            | "entendido"
+            | "ótimo"
+            | "otimo"
+            | "beleza"
+            | "certo"
+            | "claro"
+            | "com certeza"
+            | "boa pergunta"
+            | "excelente pergunta"
+            | "boa observação"
+            | "boa observacao"
+            | "faz sentido"
+            | "sim"
+            | "combinado"
+    )
+}
+
+fn preparar_candidata(
+    mut texto: String,
+    secao_resumo: bool,
+    terminava_dois_pontos: bool,
+) -> Option<LinhaCandidata> {
+    let fatica = eh_abertura_fatica(&texto);
+    let palavras = texto.split_whitespace().count();
+    let sem_separador = texto.trim_end_matches([';', ',']).len();
+    texto.truncate(sem_separador);
+    let eh_pergunta = texto.ends_with('?');
+    let minimo = if eh_pergunta { 2 } else { 4 };
+    if palavras < minimo {
+        return None;
+    }
+    if !texto.ends_with(['.', '!', '?', '…']) {
+        texto.push('.');
+    }
+    Some(LinhaCandidata {
+        texto,
+        eh_secao_resumo: secao_resumo,
+        eh_intro_lista: terminava_dois_pontos && palavras <= 10,
+        eh_fatica: fatica,
+        eh_pergunta,
+        palavras,
+    })
+}
+
+fn coletar_candidatos(resposta: &str) -> Vec<LinhaCandidata> {
     let mut candidatos = Vec::new();
     let mut em_bloco = false;
-    let mut palavras_lidas = 0;
+    let mut secao_resumo = false;
 
     for linha in resposta.lines() {
         let l = linha.trim();
@@ -41,74 +188,162 @@ pub fn extrair_resumo_direto(resposta: &str, projeto: &str, max_palavras: usize)
         if em_bloco || l.is_empty() {
             continue;
         }
-        if l.starts_with('#')
-            || l.starts_with('|')
+        if l.starts_with('#') {
+            secao_resumo = eh_secao_resumo(&limpar_linha(l));
+            continue;
+        }
+        if l.starts_with('|')
             || l.starts_with('>')
             || l.starts_with("<!--")
             || l.starts_with("http")
+            || l.chars().all(|c| matches!(c, '-' | '=' | '*' | '_'))
         {
             continue;
         }
 
-        let mut l_limpo = limpar_linha(l);
-        let palavras = l_limpo.split_whitespace().count();
-        if palavras >= 4 {
-            // Item de lista sem ponto final colaria no próximo na fala.
-            let sem_separador = l_limpo.trim_end_matches([';', ',']).len();
-            l_limpo.truncate(sem_separador);
-            if !l_limpo.ends_with(['.', '!', '?', '…']) {
-                l_limpo.push('.');
-            }
-            candidatos.push(l_limpo);
-            palavras_lidas += palavras;
-            if max_palavras > 0 && palavras_lidas >= max_palavras {
-                break;
-            }
+        let limpo = limpar_linha(l);
+        let terminava_dois_pontos = l.trim_end_matches(['*', '`', '_']).ends_with(':');
+        if let Some(cand) = preparar_candidata(limpo, secao_resumo, terminava_dois_pontos) {
+            candidatos.push(cand);
         }
     }
+    candidatos
+}
 
+fn selecionar_principais(
+    candidatos: &[LinhaCandidata],
+    max_palavras: usize,
+) -> Vec<&LinhaCandidata> {
+    if max_palavras == 0 {
+        return candidatos.iter().collect();
+    }
+
+    let na_secao_resumo: Vec<&LinhaCandidata> = candidatos
+        .iter()
+        .filter(|c| c.eh_secao_resumo && !c.eh_fatica)
+        .collect();
+    let base: Vec<&LinhaCandidata> = if !na_secao_resumo.is_empty() {
+        na_secao_resumo
+    } else {
+        candidatos.iter().collect()
+    };
+
+    // Pula aberturas puramente fáticas ou rótulos introdutórios ("O que mudou:") quando há conteúdo útil depois.
+    let mut filtrados: Vec<&LinhaCandidata> = Vec::new();
+    let total = base.len();
+    for (idx, item) in base.iter().enumerate() {
+        let ainda_ha_conteudo = idx + 1 < total;
+        if filtrados.is_empty() && (item.eh_fatica || (item.eh_intro_lista && ainda_ha_conteudo)) {
+            continue;
+        }
+        if item.eh_intro_lista && ainda_ha_conteudo {
+            continue;
+        }
+        filtrados.push(*item);
+    }
+    if filtrados.is_empty() {
+        base
+    } else {
+        filtrados
+    }
+}
+
+fn prefixar_projeto(escolhida: String, projeto: &str) -> String {
+    let proj_limpo = normalizar_underscores(projeto);
+    let proj = proj_limpo.trim();
+    if proj.is_empty() || proj == "geral" {
+        return escolhida;
+    }
+
+    let minuscula = escolhida.to_lowercase();
+    let tem_locativo = minuscula.starts_with("no ")
+        || minuscula.starts_with("na ")
+        || minuscula.starts_with("em ")
+        || minuscula.starts_with("aqui no ");
+    if tem_locativo {
+        return escolhida;
+    }
+
+    let mut chars = escolhida.chars();
+    let primeiro = chars.next();
+    let segundo = chars.clone().next();
+    let manter_maiuscula = segundo.is_some_and(|c| c.is_uppercase());
+    let inicio = match primeiro {
+        Some(c) if !manter_maiuscula => c.to_lowercase().to_string(),
+        Some(c) => c.to_string(),
+        None => String::new(),
+    };
+    let resto: String = chars.collect();
+    format!("No {proj}, {inicio}{resto}")
+}
+
+/// Extrai a fala curta da narração diretamente do texto corrido da resposta
+/// final, pulando títulos, tabelas, citações, links e blocos de código.
+/// Com `max_palavras` > 0, prioriza seção de resumo, preserva pergunta final
+/// pendente e mantém frases inteiras no limite; com 0, lê tudo.
+pub fn extrair_resumo_direto(resposta: &str, projeto: &str, max_palavras: usize) -> String {
+    let candidatos = coletar_candidatos(resposta);
     if candidatos.is_empty() {
-        return if !projeto.is_empty() && projeto != "geral" {
-            format!("Tudo pronto por aqui no {projeto}.")
+        let proj = normalizar_underscores(projeto);
+        let proj = proj.trim();
+        return if !proj.is_empty() && proj != "geral" {
+            format!("Tudo pronto por aqui no {proj}.")
         } else {
             "Tudo pronto por aqui.".to_string()
         };
     }
 
-    let texto = candidatos.join(" ");
+    let selecionados = selecionar_principais(&candidatos, max_palavras);
+    let texto_completo = selecionados
+        .iter()
+        .map(|c| c.texto.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+
     let mut escolhida = if max_palavras == 0 {
-        texto
+        texto_completo
     } else {
-        limitar_frases(&texto, max_palavras)
+        let pergunta_final = candidatos.iter().rev().take(3).find(|c| c.eh_pergunta);
+
+        let mut resumo = limitar_frases(&texto_completo, max_palavras);
+        if let Some(perg) = pergunta_final {
+            if !resumo.contains(&perg.texto) && perg.palavras < max_palavras {
+                let orcamento = max_palavras.saturating_sub(perg.palavras);
+                if orcamento >= 6 {
+                    let parte = limitar_frases(&texto_completo, orcamento);
+                    resumo = format!("{parte} {}", perg.texto);
+                }
+            }
+        }
+        resumo
     };
 
     if !escolhida.ends_with(['.', '!', '?', '…']) {
         escolhida.push('.');
     }
 
-    if !projeto.is_empty() && projeto != "geral" {
-        let minuscula = escolhida.to_lowercase();
-        let tem_locativo = minuscula.starts_with("no ")
-            || minuscula.starts_with("na ")
-            || minuscula.starts_with("em ")
-            || minuscula.starts_with("aqui no ");
+    prefixar_projeto(escolhida, projeto)
+}
 
-        if !tem_locativo {
-            let mut chars = escolhida.chars();
-            let primeira_letra = chars
-                .next()
-                .map(|c| c.to_lowercase().to_string())
-                .unwrap_or_default();
-            let resto: String = chars.collect();
-            escolhida = format!("No {projeto}, {primeira_letra}{resto}");
-        }
+fn cortar_em_pausa_ou_reticencias(frase: &str, max_palavras: usize) -> String {
+    let tokens: Vec<&str> = frase.split_whitespace().collect();
+    let minimo = (max_palavras / 2).max(1);
+    if let Some(idx) = (minimo..=max_palavras.min(tokens.len()))
+        .rev()
+        .find(|&i| tokens[i - 1].ends_with([',', ';']))
+    {
+        let mut trecho = tokens[..idx].join(" ");
+        let sem_pausa = trecho.trim_end_matches([',', ';']).len();
+        trecho.truncate(sem_pausa);
+        trecho.push('.');
+        return trecho;
     }
-
-    escolhida
+    let corte: Vec<&str> = tokens.into_iter().take(max_palavras).collect();
+    format!("{}...", corte.join(" "))
 }
 
 /// Junta frases inteiras até `max_palavras`. Se a primeira sozinha passa do
-/// limite, corta nela com reticências.
+/// limite, fecha na última vírgula útil ou corta com reticências.
 fn limitar_frases(texto: &str, max_palavras: usize) -> String {
     // Pontuação seguida de espaço ou fim: "README.md" e "v0.2.0" não quebram.
     let re_fim = Regex::new(r"[.!?…]+(?:\s+|$)").unwrap();
@@ -127,8 +362,7 @@ fn limitar_frases(texto: &str, max_palavras: usize) -> String {
     for frase in frases.into_iter().filter(|f| !f.is_empty()) {
         let palavras = frase.split_whitespace().count();
         if total == 0 && palavras > max_palavras {
-            let corte: Vec<&str> = frase.split_whitespace().take(max_palavras).collect();
-            return format!("{}...", corte.join(" "));
+            return cortar_em_pausa_ou_reticencias(frase, max_palavras);
         }
         if total + palavras > max_palavras {
             break;
@@ -533,6 +767,39 @@ mod tests {
         assert_eq!(
             extrair_resumo_direto(resposta, "", 4),
             "Uma frase comprida demais..."
+        );
+    }
+
+    #[test]
+    fn test_limpar_linha_para_fala_tts() {
+        let bruta = "- **Card ([cotas.rs](file:///Users/judhagsan/voz/src/cotas.rs#L10-L20)):** ajustei `renderizar_card` (b36309b, +300 / -168) em /Users/judhagsan/voz/src/painel.rs e https://exemplo.com (main → main) com `macOS/Linux`.";
+        assert_eq!(
+            limpar_linha(bruta),
+            "Card (cotas.rs): ajustei renderizar card em painel.rs e (main para main) com macOS/Linux."
+        );
+    }
+
+    #[test]
+    fn test_resumo_prioriza_secao_resumo_e_preserva_pergunta_final() {
+        let resposta = "Perfeito!\n\nAnalisei vários detalhes técnicos do sistema antes de mudar qualquer coisa.\n\n## Resumo\n\nImplementei o filtro automático de serviços ativos.\n\nO que mudou:\n- O painel agora oculta colunas inativas.\n\nPosso commitar agora?";
+        let fala = extrair_resumo_direto(resposta, "voz", 20);
+        assert!(fala.starts_with("No voz, implementei o filtro automático de serviços ativos."));
+        assert!(fala.ends_with("Posso commitar agora?"));
+        assert!(!fala.contains("Perfeito"));
+        assert!(!fala.contains("O que mudou"));
+    }
+
+    #[test]
+    fn test_resumo_preserva_siglas_e_fecha_em_virgula() {
+        assert_eq!(
+            extrair_resumo_direto("API de cotas retornou erro de autenticação.", "meu_app", 20),
+            "No meu app, API de cotas retornou erro de autenticação."
+        );
+
+        let longa = "Atualizei todos os provedores de voz e o painel de projetos ativos, removendo código antigo que não precisava mais ficar ali.";
+        assert_eq!(
+            extrair_resumo_direto(longa, "", 13),
+            "Atualizei todos os provedores de voz e o painel de projetos ativos."
         );
     }
 }

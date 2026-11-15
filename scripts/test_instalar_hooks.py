@@ -5,7 +5,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from instalar_hooks import carregar, configurar_codex, configurar_claude, configurar_antigravity, salvar
+from instalar_hooks import (
+    BLOCO_INSTRUCAO,
+    aplicar_bloco_instrucao,
+    carregar,
+    configurar_antigravity,
+    configurar_claude,
+    configurar_codex,
+    configurar_instrucao,
+    salvar,
+)
 
 
 class InstalacaoHooksTest(unittest.TestCase):
@@ -63,6 +72,32 @@ class InstalacaoHooksTest(unittest.TestCase):
         self.assertEqual(claude["hooks"]["Stop"][0]["hooks"][0]["command"], "ai-memory stop")
         self.assertEqual(claude["model"], "meu-modelo")
         self.assertEqual(agy["ai-memory"]["Stop"][0]["command"], "ai-memory stop")
+
+    def test_instrucao_cria_atualiza_bloco_preservando_regras_existentes(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            arquivo = Path(pasta) / "AGENTS.md"
+            original = "# Minhas regras\n\nNão confunda <!-- voz:inicio --> citado em prosa.\n"
+            arquivo.write_text(original, encoding="utf-8")
+
+            configurar_instrucao(arquivo)
+            apos_primeira = arquivo.read_text(encoding="utf-8")
+            self.assertIn("# Minhas regras", apos_primeira)
+            self.assertIn("citado em prosa.", apos_primeira)
+            self.assertIn(BLOCO_INSTRUCAO, apos_primeira)
+            self.assertEqual(arquivo.with_name("AGENTS.md.voz.bak").read_text(encoding="utf-8"), original)
+
+            # Segunda execução é idempotente e não reescreve
+            mtime = arquivo.stat().st_mtime_ns
+            configurar_instrucao(arquivo)
+            self.assertEqual(arquivo.stat().st_mtime_ns, mtime)
+
+            # Atualização de bloco antigo preserva conteúdo antes e depois
+            antigo = "# Antes\n\n<!-- voz:inicio -->\ntexto velho\n<!-- voz:fim -->\n\n# Depois\n"
+            atualizado = aplicar_bloco_instrucao(antigo)
+            self.assertTrue(atualizado.startswith("# Antes\n\n"))
+            self.assertIn(BLOCO_INSTRUCAO, atualizado)
+            self.assertTrue(atualizado.endswith("\n# Depois\n"))
+            self.assertNotIn("texto velho", atualizado)
 
 
 if __name__ == "__main__":
