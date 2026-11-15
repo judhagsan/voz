@@ -121,7 +121,7 @@ Caso o computador esteja sem conexão com a internet, o Voz recai automaticament
 
 ## Ativação nos Agentes
 
-- **Ganchos de monitoramento:** configurados automaticamente durante a execução do instalador.
+- **Ganchos e instruções de resumo:** configurados automaticamente durante a execução do instalador (inclui bloco gerenciado para respostas objetivas em voz alta; use `--sem-instrucoes` no script `scripts/instalar_hooks.py` para registrar apenas os hooks).
 - **Codex:** ao abrir o chat, execute `/hooks` e confirme os ganchos do Voz para autorizar a execução.
 
 ---
