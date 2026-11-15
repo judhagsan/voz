@@ -53,21 +53,6 @@ if (Test-Path "$BinDir\agy-bin.exe") {
 Write-Host ""
 Write-Host "==> Configuração de Provedores de Voz no Windows:"
 Write-Host "    [✓] Edge-TTS (Thalita): pronto para uso em alta fidelidade sem chaves de API."
-
-if ($env:ELEVENLABS_API_KEY) {
-    Write-Host "    [✓] ElevenLabs: chave configurada."
-} else {
-    Write-Host "    [-] ElevenLabs (opcional): https://elevenlabs.io"
-    Write-Host "        [System.Environment]::SetEnvironmentVariable('ELEVENLABS_API_KEY', 'SUA_CHAVE', 'User')"
-}
-
-if ($env:OPENAI_API_KEY) {
-    Write-Host "    [✓] OpenAI: chave configurada."
-} else {
-    Write-Host "    [-] OpenAI (opcional): https://platform.openai.com/api-keys"
-    Write-Host "        [System.Environment]::SetEnvironmentVariable('OPENAI_API_KEY', 'SUA_CHAVE', 'User')"
-}
-
 Write-Host "    [✓] Síntese offline (System.Speech): pronta para uso offline sem chaves."
 
 Write-Host ""

@@ -1,12 +1,8 @@
-//! Fala em voz alta. O Gemini manda o áudio em streaming e a fala começa no
-//! primeiro pedaço, sem esperar o resto; sem chave, sem rede ou com a cota
-//! esgotada, quem fala é a voz de reserva local do sistema operacional. Nenhum
-//! áudio é gravado em disco.
+//! Fala em voz alta usando Edge-TTS como provedor principal e a voz nativa
+//! do sistema operacional como reserva offline.
 
 use std::fs;
 use std::path::Path;
-use std::sync::mpsc;
-use std::thread;
 
 use crate::audio;
 use crate::fonetica::{ajustar_fonetica, carregar_regras};
@@ -69,7 +65,7 @@ pub fn sortear_frase(base: &Path, categoria: &str) -> Option<String> {
     Some(escolhida)
 }
 
-pub fn falar(base: &Path, texto: &str, timeout_seg: u64) {
+pub fn falar(base: &Path, texto: &str, _timeout_seg: u64) {
     let cfg_json = ler_config(base);
     let provedores: Vec<String> = cfg_json
         .get("provedores")
@@ -81,89 +77,32 @@ pub fn falar(base: &Path, texto: &str, timeout_seg: u64) {
                 .map(String::from)
                 .collect()
         })
-        .unwrap_or_else(|| {
-            vec![
-                "edge".to_string(),
-                "elevenlabs".to_string(),
-                "openai".to_string(),
-            ]
-        });
+        .unwrap_or_else(|| vec!["edge".to_string()]);
 
     let para_voz = ajustar_fonetica(texto, &carregar_regras(base, false));
 
     for prov in &provedores {
-        if prov == "edge" {
-            let cfg = crate::edge::Config::de_json(cfg_json.get("edge"));
-            match crate::edge::sintetizar_e_tocar(base, &cfg, &para_voz) {
-                Ok(()) => return,
-                Err(e) => {
-                    if std::env::var("VOZ_DEBUG").is_ok() {
-                        eprintln!("[voz] edge indisponível ({e}); tentando próximo provedor.");
+        match prov.as_str() {
+            "edge" => {
+                let cfg = crate::edge::Config::de_json(cfg_json.get("edge"));
+                match crate::edge::sintetizar_e_tocar(base, &cfg, &para_voz) {
+                    Ok(()) => return,
+                    Err(e) => {
+                        if std::env::var("VOZ_DEBUG").is_ok() {
+                            eprintln!("[voz] edge indisponível ({e}); acionando voz de reserva.");
+                        }
                     }
-                    continue;
                 }
-            }
-        }
-
-        let (envia, recebe) = mpsc::channel();
-        let base_tocador = base.to_path_buf();
-        let tocador = thread::spawn(move || audio::tocar_stream(&base_tocador, recebe));
-
-        let res = match prov.as_str() {
-            "gemini" => {
-                let cfg = crate::gemini::Config::de_json(cfg_json.get("gemini"));
-                crate::gemini::sintetizar_em_stream(&cfg, &para_voz, timeout_seg, |pedaco| {
-                    let _ = envia.send(pedaco);
-                })
-            }
-            "elevenlabs" => {
-                let cfg = crate::elevenlabs::Config::de_json(cfg_json.get("elevenlabs"));
-                crate::elevenlabs::sintetizar_em_stream(&cfg, &para_voz, timeout_seg, |pedaco| {
-                    let _ = envia.send(pedaco);
-                })
-            }
-            "openai" => {
-                let cfg = crate::openai::Config::de_json(cfg_json.get("openai"));
-                crate::openai::sintetizar_em_stream(&cfg, &para_voz, timeout_seg, |pedaco| {
-                    let _ = envia.send(pedaco);
-                })
             }
             outro => {
-                drop(envia);
-                let _ = tocador.join();
                 if std::env::var("VOZ_DEBUG").is_ok() {
-                    eprintln!("[voz] provedor desconhecido: {outro}");
-                }
-                continue;
-            }
-        };
-
-        drop(envia);
-        let tocou = tocador.join().unwrap_or(false);
-
-        match res {
-            Ok(()) if tocou => return,
-            // Parou no meio: repetir a frase inteira no say soaria pior que o corte.
-            Err(e) if tocou => {
-                if std::env::var("VOZ_DEBUG").is_ok() {
-                    eprintln!("[voz] o stream de {prov} parou no meio ({e}).");
-                }
-                return;
-            }
-            Err(e) => {
-                if std::env::var("VOZ_DEBUG").is_ok() {
-                    eprintln!("[voz] {prov} indisponível ({e}); tentando próximo provedor.");
-                }
-            }
-            Ok(()) => {
-                if std::env::var("VOZ_DEBUG").is_ok() {
-                    eprintln!("[voz] saída de áudio indisponível para {prov}.");
+                    eprintln!("[voz] provedor não suportado: {outro}");
                 }
             }
         }
     }
 
-    // Se todos os provedores em nuvem falharem, aciona a reserva local do sistema operacional
+    // Se o provedor principal falhar, aciona a reserva local do sistema operacional.
     audio::dizer(base, &ajustar_fonetica(texto, &carregar_regras(base, true)));
 }
 

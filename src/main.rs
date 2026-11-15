@@ -3,16 +3,11 @@ mod audio;
 mod codex;
 mod cotas;
 mod edge;
-mod elevenlabs;
 mod fala;
 mod fonetica;
-mod gemini;
-mod keychain;
 mod narrar;
-mod openai;
 mod painel;
 mod platform;
-mod resumo;
 mod tela;
 mod transcript;
 
@@ -213,10 +208,10 @@ fn main() {
         let transcript = args.get(2).map(Path::new);
         let cwd = args.get(3).map(Path::new);
         if let Some(t) = transcript {
-            let (inicio, pedido, resp) = transcript::ultimo_turno(t);
+            let (inicio, _pedido, resp) = transcript::ultimo_turno(t);
             let resp_texto = resp.unwrap_or_else(|| "Nenhuma resposta encontrada.".to_string());
             let proj = narrar::nome_do_projeto(cwd);
-            let fala = narrar::montar_fala(&base, &proj, &pedido, &resp_texto);
+            let fala = narrar::montar_fala(&base, &proj, &resp_texto);
             let para_voz =
                 fonetica::ajustar_fonetica(&fala, &fonetica::carregar_regras(&base, false));
 
@@ -233,7 +228,7 @@ fn main() {
 
     if args.len() > 1 && args[1] == "fonetica" {
         let texto = args[2..].join(" ");
-        for (voz, reserva) in [("gemini", false), ("reserva", true)] {
+        for (voz, reserva) in [("edge", false), ("reserva", true)] {
             let regras = fonetica::carregar_regras(&base, reserva);
             println!("{voz}: {}", fonetica::ajustar_fonetica(&texto, &regras));
         }

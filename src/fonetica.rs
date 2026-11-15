@@ -11,7 +11,7 @@ pub struct RegraFonetica {
 const TERMOS_GERAIS: &[(&str, &str)] = &[(r"\bjudhagsan\b", "Judágê-San"), (r"\bjson\b", "Jêison")];
 
 /// Termos em inglês que a voz de reserva (`say`) lê com fonética portuguesa.
-/// O Gemini os pronuncia certo sozinho, e o respelling só atrapalharia.
+/// A voz neural principal os pronuncia certo sozinha, e o respelling só atrapalharia.
 const TERMOS_RESERVA: &[(&str, &str)] = &[
     (r"\bgithub\b", "Guít-râb"),
     (r"\bgitlab\b", "Guít-lébi"),
@@ -127,7 +127,7 @@ mod tests {
     }
 
     #[test]
-    fn test_gemini_mantem_termos_em_ingles() {
+    fn test_voz_principal_mantem_termos_em_ingles() {
         let regras = regras_padrao(false);
         let entrada = "Abri o PR da API no GitHub do judhagsan.";
         let saida = ajustar_fonetica(entrada, &regras);
@@ -135,7 +135,7 @@ mod tests {
     }
 
     #[test]
-    fn test_gemini_converte_json() {
+    fn test_voz_principal_converte_json() {
         let regras = regras_padrao(false);
         let entrada = "Atualizei o arquivo JSON e rodei o Git.";
         let saida = ajustar_fonetica(entrada, &regras);
@@ -153,9 +153,9 @@ mod tests {
         .unwrap();
         let texto = "O fulano rodou o git.";
         let reserva = ajustar_fonetica(texto, &carregar_regras(&pasta, true));
-        let gemini = ajustar_fonetica(texto, &carregar_regras(&pasta, false));
+        let principal = ajustar_fonetica(texto, &carregar_regras(&pasta, false));
         assert_eq!(reserva, "O Fulâno rodou o Guite.");
-        assert_eq!(gemini, "O Fulâno rodou o git.");
+        assert_eq!(principal, "O Fulâno rodou o git.");
         let _ = fs::remove_dir_all(&pasta);
     }
 }

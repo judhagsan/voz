@@ -23,10 +23,10 @@ pub fn limpar_linha(linha: &str) -> String {
     sem_bullet.trim().trim_end_matches(':').to_string()
 }
 
-/// Fala de reserva da narração, para quando o resumo do Gemini não vem: usa o
-/// texto corrido da resposta final, pulando títulos, tabelas, citações, links
-/// soltos e tudo dentro de blocos de código. Com `max_palavras` > 0, fica nas
-/// frases inteiras que cabem no limite; com 0, lê tudo.
+/// Extrai a fala curta da narração diretamente do texto corrido da resposta
+/// final, pulando títulos, tabelas, citações, links soltos e tudo dentro de
+/// blocos de código. Com `max_palavras` > 0, fica nas frases inteiras que cabem
+/// no limite; com 0, lê tudo.
 pub fn extrair_resumo_direto(resposta: &str, projeto: &str, max_palavras: usize) -> String {
     let mut candidatos = Vec::new();
     let mut em_bloco = false;
