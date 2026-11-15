@@ -247,24 +247,7 @@ fn main() {
         return;
     }
 
-    // Modo Painel: se chamado sem argumentos ou com flags do painel (-a, -w, --ativos, --watch)
-    if args.len() == 1
-        || args
-            .iter()
-            .any(|a| a == "-a" || a == "--ativos" || a == "-w" || a == "--watch")
-    {
-        let apenas_ativos = args.iter().any(|a| a == "-a" || a == "--ativos");
-        let mut watch = None;
-        for (i, a) in args.iter().enumerate() {
-            if a == "-w" || a == "--watch" {
-                let seg = args
-                    .get(i + 1)
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .unwrap_or(1.0);
-                watch = Some(seg);
-                break;
-            }
-        }
+    if let Some((apenas_ativos, watch)) = args_do_painel(&args) {
         painel::rodar_painel(&base, apenas_ativos, watch);
         return;
     }
@@ -277,6 +260,33 @@ fn main() {
 
     let entrada = ler_stdin();
     processar_aviso(&base, categoria, &entrada);
+}
+
+/// Interpreta argumentos do painel; por padrão oculta projetos sem pendências.
+fn args_do_painel(args: &[String]) -> Option<(bool, Option<f64>)> {
+    let eh_flag_painel = args.iter().skip(1).any(|a| {
+        matches!(
+            a.as_str(),
+            "-a" | "--ativos" | "-t" | "--todos" | "-w" | "--watch"
+        )
+    });
+    if args.len() > 1 && !eh_flag_painel {
+        return None;
+    }
+
+    let apenas_ativos = !args.iter().skip(1).any(|a| a == "-t" || a == "--todos");
+    let mut watch = None;
+    for (i, a) in args.iter().enumerate().skip(1) {
+        if a == "-w" || a == "--watch" {
+            let seg = args
+                .get(i + 1)
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(1.0);
+            watch = Some(seg);
+            break;
+        }
+    }
+    Some((apenas_ativos, watch))
 }
 
 fn processar_aviso(base: &Path, categoria: &str, entrada: &str) {
@@ -299,5 +309,26 @@ mod tests {
         std::env::set_var("VOZ_DIR", &temp);
         assert_eq!(caminho_base(), temp);
         std::env::remove_var("VOZ_DIR");
+    }
+
+    #[test]
+    fn test_args_do_painel_padrao_ativos_e_flags() {
+        let s =
+            |itens: &[&str]| -> Vec<String> { itens.iter().map(|v| (*v).to_string()).collect() };
+
+        assert_eq!(args_do_painel(&s(&["voz"])), Some((true, None)));
+        assert_eq!(args_do_painel(&s(&["voz", "-w"])), Some((true, Some(1.0))));
+        assert_eq!(
+            args_do_painel(&s(&["voz", "-w", "2.5"])),
+            Some((true, Some(2.5)))
+        );
+        assert_eq!(args_do_painel(&s(&["voz", "-a"])), Some((true, None)));
+        assert_eq!(args_do_painel(&s(&["voz", "--ativos"])), Some((true, None)));
+        assert_eq!(args_do_painel(&s(&["voz", "-t"])), Some((false, None)));
+        assert_eq!(
+            args_do_painel(&s(&["voz", "--todos", "-w", "2"])),
+            Some((false, Some(2.0)))
+        );
+        assert_eq!(args_do_painel(&s(&["voz", "terminei"])), None);
     }
 }

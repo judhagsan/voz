@@ -888,12 +888,15 @@ pub fn ler_cache(base: &Path) -> Option<Cotas> {
     })
 }
 
+fn provedor_ativo(p: &Provedor) -> bool {
+    p.erro.is_none() && !p.grupos.is_empty()
+}
+
 pub fn fresca(base: &Path, cotas: &Cotas) -> bool {
-    if cotas.claude.erro.is_some()
-        || cotas.antigravity.erro.is_some()
-        || cotas.chatgpt.erro.is_some()
-        || Local::now().timestamp() - cotas.lido_em >= VALIDADE_SEG
-    {
+    let algum_ativo = provedor_ativo(&cotas.claude)
+        || provedor_ativo(&cotas.antigravity)
+        || provedor_ativo(&cotas.chatgpt);
+    if !algum_ativo || Local::now().timestamp() - cotas.lido_em >= VALIDADE_SEG {
         return false;
     }
     if let Ok(cfg_texto) = fs::read_to_string(base.join("config.json")) {
@@ -1046,25 +1049,29 @@ fn format_item_coluna(rotulo: &str, j: &Janela, agora: DateTime<Local>) -> Strin
     )
 }
 
-fn colunas_claude(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
+fn linha_erro(erro: &str) -> String {
+    let curto: String = erro.chars().take(COL_LARGURA).collect();
+    format!("{FRACO}{curto:<largura$}{RESET}", largura = COL_LARGURA)
+}
+
+fn cabecalho_historico(p: &Provedor) -> Option<String> {
+    let instante = p
+        .historico_em
+        .and_then(|t| Local.timestamp_opt(t, 0).single())?;
+    Some(format!(
+        "{FRACO}Histórico de {:<largura$}{RESET}",
+        instante.format("%d/%m %H:%M"),
+        largura = COL_LARGURA.saturating_sub(13)
+    ))
+}
+
+fn colunas_simples(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
     if let Some(erro) = &p.erro {
-        let curto: String = erro.chars().take(COL_LARGURA).collect();
-        return vec![format!(
-            "{FRACO}{:<largura$}{RESET}",
-            curto,
-            largura = COL_LARGURA
-        )];
+        return vec![linha_erro(erro)];
     }
     let mut linhas = Vec::new();
-    if let Some(instante) = p
-        .historico_em
-        .and_then(|t| Local.timestamp_opt(t, 0).single())
-    {
-        linhas.push(format!(
-            "{FRACO}Histórico de {:<largura$}{RESET}",
-            instante.format("%d/%m %H:%M"),
-            largura = COL_LARGURA.saturating_sub(13)
-        ));
+    if let Some(hist) = cabecalho_historico(p) {
+        linhas.push(hist);
     }
     for g in &p.grupos {
         for j in &g.janelas {
@@ -1098,23 +1105,11 @@ fn adicionar_janelas_grupo(
 
 fn colunas_antigravity(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
     if let Some(erro) = &p.erro {
-        let curto: String = erro.chars().take(COL_LARGURA).collect();
-        return vec![format!(
-            "{FRACO}{:<largura$}{RESET}",
-            curto,
-            largura = COL_LARGURA
-        )];
+        return vec![linha_erro(erro)];
     }
     let mut linhas = Vec::new();
-    if let Some(instante) = p
-        .historico_em
-        .and_then(|t| Local.timestamp_opt(t, 0).single())
-    {
-        linhas.push(format!(
-            "{FRACO}Histórico de {:<largura$}{RESET}",
-            instante.format("%d/%m %H:%M"),
-            largura = COL_LARGURA.saturating_sub(13)
-        ));
+    if let Some(hist) = cabecalho_historico(p) {
+        linhas.push(hist);
     }
 
     // 1. Argon Assinatura
@@ -1201,112 +1196,102 @@ fn colunas_antigravity(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
     linhas
 }
 
-fn colunas_chatgpt(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
-    if let Some(erro) = &p.erro {
-        let curto: String = erro.chars().take(COL_LARGURA).collect();
-        return vec![format!(
-            "{FRACO}{:<largura$}{RESET}",
-            curto,
-            largura = COL_LARGURA
-        )];
-    }
-    let mut linhas = Vec::new();
-    if let Some(instante) = p
-        .historico_em
-        .and_then(|t| Local.timestamp_opt(t, 0).single())
-    {
-        linhas.push(format!(
-            "{FRACO}Histórico de {:<largura$}{RESET}",
-            instante.format("%d/%m %H:%M"),
-            largura = COL_LARGURA.saturating_sub(13)
-        ));
-    }
-    for g in &p.grupos {
-        for j in &g.janelas {
-            linhas.push(format_item_coluna(&j.rotulo, j, agora));
-        }
-    }
-    linhas
-}
-
 #[allow(dead_code)]
 fn linhas_provedor(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
-    colunas_claude(p, agora)
+    colunas_simples(p, agora)
         .into_iter()
         .map(|l| linha(&l))
         .collect()
 }
 
-/// Card de cotas dos agentes em formato horizontal de 3 colunas.
+fn card_mensagem(mensagem: &str, rodape: Option<&str>) -> Vec<String> {
+    let borda = "─".repeat(COL_LARGURA);
+    let mut linhas = vec![
+        format!("╭─{borda}─╮"),
+        format!(
+            "│ {} │",
+            alinhar(&format!("{FRACO}{mensagem}{RESET}"), COL_LARGURA)
+        ),
+    ];
+    if let Some(r) = rodape.filter(|s| !s.is_empty()) {
+        let espaco = COL_LARGURA.saturating_sub(r.chars().count());
+        linhas.push(format!("│ {}{FRACO}{r}{RESET} │", " ".repeat(espaco)));
+    }
+    linhas.push(format!("╰─{borda}─╯"));
+    linhas
+}
+
+/// Card de cotas dos agentes em colunas dinâmicas conforme serviços ativos.
 pub fn renderizar_card(cotas: Option<&Cotas>, agora: DateTime<Local>) -> Vec<String> {
-    let topo = format!(
-        "╭─{}─┬─{}─┬─{}─╮",
-        "─".repeat(COL_LARGURA),
-        "─".repeat(COL_LARGURA),
-        "─".repeat(COL_LARGURA)
-    );
-    let sep = format!(
-        "├─{}─┼─{}─┼─{}─┤",
-        "─".repeat(COL_LARGURA),
-        "─".repeat(COL_LARGURA),
-        "─".repeat(COL_LARGURA)
-    );
-    let base = format!(
-        "╰─{}─┴─{}─┴─{}─╯",
-        "─".repeat(COL_LARGURA),
-        "─".repeat(COL_LARGURA),
-        "─".repeat(COL_LARGURA)
-    );
+    let Some(c) = cotas else {
+        return card_mensagem("Lendo as cotas dos agentes…", None);
+    };
 
-    let mut linhas = vec![topo];
-    match cotas {
-        None => {
-            linhas.push(linha(&format!("{FRACO}Lendo as cotas dos agentes…{RESET}")));
+    let lido = Local
+        .timestamp_opt(c.lido_em, 0)
+        .single()
+        .map(|d| format!("lido às {}", d.format("%H:%M")))
+        .unwrap_or_default();
+
+    let mut colunas: Vec<(&str, &str, Vec<String>)> = Vec::new();
+    if provedor_ativo(&c.claude) {
+        colunas.push(("Claude Code", MAGENTA, colunas_simples(&c.claude, agora)));
+    }
+    if provedor_ativo(&c.antigravity) {
+        colunas.push((
+            "Antigravity",
+            AZUL,
+            colunas_antigravity(&c.antigravity, agora),
+        ));
+    }
+    if provedor_ativo(&c.chatgpt) {
+        colunas.push(("ChatGPT / Codex", VERDE, colunas_simples(&c.chatgpt, agora)));
+    }
+
+    if colunas.is_empty() {
+        return card_mensagem(
+            "Nenhum serviço ativo no momento.",
+            (!lido.is_empty()).then_some(lido.as_str()),
+        );
+    }
+
+    let bordas: Vec<String> = (0..colunas.len())
+        .map(|_| "─".repeat(COL_LARGURA))
+        .collect();
+    let cabecalhos: Vec<String> = colunas
+        .iter()
+        .map(|(nome, cor, _)| cabecalho_coluna(nome, cor, COL_LARGURA))
+        .collect();
+
+    let mut linhas = vec![
+        format!("╭─{}─╮", bordas.join("─┬─")),
+        format!("│ {} │", cabecalhos.join(" │ ")),
+        format!("├─{}─┤", bordas.join("─┼─")),
+    ];
+
+    let mut linhas_cols: Vec<Vec<String>> = colunas.into_iter().map(|(_, _, l)| l).collect();
+    let mut total_linhas = linhas_cols.iter().map(Vec::len).max().unwrap_or(0).max(4);
+    if let Some(ultima) = linhas_cols.last_mut() {
+        if ultima.len() == total_linhas && !lido.is_empty() {
+            total_linhas += 1;
         }
-        Some(c) => {
-            let cab1 = cabecalho_coluna("Claude Code", MAGENTA, COL_LARGURA);
-            let cab2 = cabecalho_coluna("Antigravity", AZUL, COL_LARGURA);
-            let cab3 = cabecalho_coluna("ChatGPT / Codex", VERDE, COL_LARGURA);
-            linhas.push(format!("│ {} │ {} │ {} │", cab1, cab2, cab3));
-            linhas.push(sep);
-
-            let mut col1 = colunas_claude(&c.claude, agora);
-            let col2 = colunas_antigravity(&c.antigravity, agora);
-            let mut col3 = colunas_chatgpt(&c.chatgpt, agora);
-
-            let lido = Local
-                .timestamp_opt(c.lido_em, 0)
-                .single()
-                .map(|d| format!("lido às {}", d.format("%H:%M")))
-                .unwrap_or_default();
-
-            let total_linhas = col1.len().max(col2.len()).max(col3.len()).max(4);
-
-            while col1.len() < total_linhas {
-                col1.push(" ".repeat(COL_LARGURA));
-            }
-            while col3.len() < total_linhas.saturating_sub(1) {
-                col3.push(" ".repeat(COL_LARGURA));
-            }
-            if col3.len() < total_linhas {
-                let espaco = COL_LARGURA.saturating_sub(lido.chars().count());
-                col3.push(format!("{}{FRACO}{lido}{RESET}", " ".repeat(espaco)));
-            }
-
-            for i in 0..total_linhas {
-                let l1 = col1.get(i).map(String::as_str).unwrap_or("");
-                let l2 = col2.get(i).map(String::as_str).unwrap_or("");
-                let l3 = col3.get(i).map(String::as_str).unwrap_or("");
-                linhas.push(format!(
-                    "│ {} │ {} │ {} │",
-                    alinhar(l1, COL_LARGURA),
-                    alinhar(l2, COL_LARGURA),
-                    alinhar(l3, COL_LARGURA)
-                ));
-            }
+        while ultima.len() < total_linhas.saturating_sub(1) {
+            ultima.push(" ".repeat(COL_LARGURA));
+        }
+        if ultima.len() < total_linhas {
+            let espaco = COL_LARGURA.saturating_sub(lido.chars().count());
+            ultima.push(format!("{}{FRACO}{lido}{RESET}", " ".repeat(espaco)));
         }
     }
-    linhas.push(base);
+
+    for i in 0..total_linhas {
+        let celulas: Vec<String> = linhas_cols
+            .iter()
+            .map(|col| alinhar(col.get(i).map(String::as_str).unwrap_or(""), COL_LARGURA))
+            .collect();
+        linhas.push(format!("│ {} │", celulas.join(" │ ")));
+    }
+    linhas.push(format!("╰─{}─╯", bordas.join("─┴─")));
     linhas
 }
 
@@ -1597,14 +1582,29 @@ sys.stdin.read()
     }
 
     #[test]
-    fn test_cota_com_erro_nao_fica_no_cache() {
-        let cotas = Cotas {
-            claude: provedor_com_erro("indisponível".to_string()),
+    fn test_cache_fresco_com_servico_inativo_e_invalido_sem_ativos() {
+        let agora = Local::now().timestamp();
+        let com_inativo = Cotas {
+            claude: provedor_com_erro("sem percentuais no /usage".to_string()),
             antigravity: ler_antigravity(QUOTA),
             chatgpt: ler_chatgpt(CHATGPT),
-            lido_em: Local::now().timestamp(),
+            lido_em: agora,
         };
-        assert!(!fresca(Path::new("."), &cotas));
+        assert!(fresca(Path::new("."), &com_inativo));
+
+        let expirado = Cotas {
+            lido_em: agora - VALIDADE_SEG - 1,
+            ..com_inativo
+        };
+        assert!(!fresca(Path::new("."), &expirado));
+
+        let todos_inativos = Cotas {
+            claude: provedor_com_erro("indisponível".to_string()),
+            antigravity: provedor_com_erro("agy não encontrado".to_string()),
+            chatgpt: provedor_com_erro("codex não encontrado".to_string()),
+            lido_em: agora,
+        };
+        assert!(!fresca(Path::new("."), &todos_inativos));
     }
 
     #[test]
@@ -1669,23 +1669,66 @@ sys.stdin.read()
     #[test]
     fn test_card_tem_largura_constante() {
         let agora = em(2026, 10, 29, 4, 20);
-        let cotas = Cotas {
+        let tres_ativos = Cotas {
             claude: ler_claude(USAGE, agora),
-            antigravity: provedor_com_erro("agy não encontrado".to_string()),
+            antigravity: ler_antigravity(QUOTA),
             chatgpt: ler_chatgpt(CHATGPT),
             lido_em: agora.timestamp(),
         };
-        for card in [
-            renderizar_card(Some(&cotas), agora),
-            renderizar_card(None, agora),
-        ] {
+        let dois_ativos = Cotas {
+            claude: provedor_com_erro("sem percentuais no /usage".to_string()),
+            antigravity: ler_antigravity(QUOTA),
+            chatgpt: ler_chatgpt(CHATGPT),
+            lido_em: agora.timestamp(),
+        };
+        let um_ativo = Cotas {
+            claude: provedor_com_erro("indisponível".to_string()),
+            antigravity: ler_antigravity(QUOTA),
+            chatgpt: provedor_com_erro("codex não encontrado".to_string()),
+            lido_em: agora.timestamp(),
+        };
+        let nenhum_ativo = Cotas {
+            claude: provedor_com_erro("indisponível".to_string()),
+            antigravity: provedor_com_erro("agy não encontrado".to_string()),
+            chatgpt: Provedor {
+                grupos: Vec::new(),
+                erro: None,
+                historico_em: None,
+            },
+            lido_em: agora.timestamp(),
+        };
+
+        let casos = [
+            (renderizar_card(Some(&tres_ativos), agora), 112),
+            (renderizar_card(Some(&dois_ativos), agora), 75),
+            (renderizar_card(Some(&um_ativo), agora), 38),
+            (renderizar_card(Some(&nenhum_ativo), agora), 38),
+            (renderizar_card(None, agora), 38),
+        ];
+        for (card, largura_esperada) in &casos {
             let larguras: HashSet<usize> = card.iter().map(|l| largura_visivel(l)).collect();
-            assert_eq!(
-                larguras.len(),
-                1,
-                "linhas com larguras diferentes: {card:#?}"
-            );
+            assert_eq!(larguras, HashSet::from([*largura_esperada]), "{card:#?}");
         }
+
+        let card_dois = &casos[1].0;
+        assert!(!card_dois.iter().any(|l| l.contains("Claude Code")));
+        assert!(!card_dois
+            .iter()
+            .any(|l| l.contains("sem percentuais no /usage")));
+        assert!(card_dois.iter().any(|l| l.contains("Antigravity")));
+        assert!(card_dois.iter().any(|l| l.contains("ChatGPT / Codex")));
+        assert!(card_dois.iter().any(|l| l.contains("lido às")));
+
+        let card_um = &casos[2].0;
+        assert!(card_um.iter().any(|l| l.contains("Antigravity")));
+        assert!(card_um.iter().any(|l| l.contains("Argon Sem")));
+        assert!(card_um.iter().any(|l| l.contains("lido às")));
+
+        let card_zero = &casos[3].0;
+        assert!(card_zero
+            .iter()
+            .any(|l| l.contains("Nenhum serviço ativo no momento.")));
+        assert!(card_zero.iter().any(|l| l.contains("lido às")));
     }
 
     #[test]

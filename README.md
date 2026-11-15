@@ -67,16 +67,16 @@ O instalador compila o executável com `cargo`, instala em `~/.local/bin` (com o
 
 ### Painel no terminal
 
-Exibir o painel de repositórios e cotas:
+Exibir o painel com os repositórios em andamento (alterações, commits pendentes, branch de trabalho ou PR aberto) e os serviços com cota ativa:
 
 ```zsh
 voz
 ```
 
-Exibir apenas repositórios com alterações ou trabalho em andamento:
+Exibir também os repositórios sem pendências no momento:
 
 ```zsh
-voz -a
+voz -t
 ```
 
 Modo contínuo ao vivo (atualiza a cada segundo, ideal para rodar no tmux):

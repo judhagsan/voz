@@ -710,3 +710,61 @@ pub fn rodar_painel(base: &Path, apenas_ativos: bool, watch: Option<f64>) {
         eprintln!("{FRACO}Varredura concluída em {dur:?}{RESET}");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn repo_exemplo(nome: &str, em_andamento: bool, prs: Vec<PrItem>) -> RepoStatus {
+        RepoStatus {
+            nome: nome.to_string(),
+            caminho: PathBuf::from(format!("/tmp/{nome}")),
+            branch: if em_andamento {
+                "feat/teste".to_string()
+            } else {
+                "main".to_string()
+            },
+            modificados: usize::from(em_andamento),
+            ahead: usize::from(em_andamento),
+            behind: 0,
+            prs,
+            em_andamento,
+        }
+    }
+
+    #[test]
+    fn test_renderizar_quadro_repos_oculta_inativos_quando_apenas_ativos() {
+        let dados = vec![
+            repo_exemplo(
+                "projeto-ativo",
+                true,
+                vec![PrItem {
+                    number: 7,
+                    commits_count: 2,
+                }],
+            ),
+            repo_exemplo("projeto-parado", false, Vec::new()),
+        ];
+
+        let apenas = renderizar_quadro_repos(&dados, true);
+        let texto = apenas.join("\n");
+        assert!(texto.contains("1 em andamento de 2 repositórios"));
+        assert!(texto.contains("projeto-ativo"));
+        assert!(texto.contains("PR #7"));
+        assert!(!texto.contains("projeto-parado"));
+
+        let todos = renderizar_quadro_repos(&dados, false);
+        assert!(todos.join("\n").contains("projeto-parado"));
+
+        let sem_pendencias =
+            renderizar_quadro_repos(&[repo_exemplo("limpo", false, Vec::new())], true);
+        assert!(sem_pendencias
+            .iter()
+            .any(|l| l.contains("Nenhum projeto com pendências no momento.")));
+        assert!(!sem_pendencias.iter().any(|l| l.contains("limpo")));
+
+        let larguras: HashSet<usize> = sem_pendencias.iter().map(|l| largura_visivel(l)).collect();
+        assert_eq!(larguras.len(), 1, "{sem_pendencias:#?}");
+    }
+}
