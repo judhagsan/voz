@@ -225,6 +225,24 @@ pub fn ler_claude(texto: &str, agora: DateTime<Local>) -> Provedor {
     }
 }
 
+fn nome_contem(nome: &str, termo_minusculo: &str) -> bool {
+    nome.to_ascii_lowercase().contains(termo_minusculo)
+}
+
+fn prioridade_grupo_antigravity(nome: &str) -> u8 {
+    if nome_contem(nome, "argon") {
+        0
+    } else if nome_contem(nome, "hydrogen") && !nome_contem(nome, "flash") {
+        1
+    } else if nome_contem(nome, "hydrogen") || nome_contem(nome, "flash") {
+        2
+    } else if nome_contem(nome, "claude") || nome_contem(nome, "gpt") {
+        3
+    } else {
+        4
+    }
+}
+
 /// Lê o JSON do `/quota` do Antigravity.
 pub fn ler_antigravity(json: &str) -> Provedor {
     let valor: serde_json::Value = match serde_json::from_str(json) {
@@ -279,8 +297,8 @@ pub fn ler_antigravity(json: &str) -> Provedor {
         janelas.sort_by_key(|j| j.rotulo != "5h");
         grupos.push(Grupo { nome, janelas });
     }
-    // O Argon tem cota própria e é o modelo principal; fica no topo.
-    grupos.sort_by_key(|g| !g.nome.contains("Argon"));
+    // Mantém Argon no topo seguido por Hydrogen/Flash e pelos modelos Claude/GPT.
+    grupos.sort_by_key(|g| prioridade_grupo_antigravity(&g.nome));
     Provedor {
         grupos,
         erro: None,
@@ -1056,6 +1074,28 @@ fn colunas_claude(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
     linhas
 }
 
+fn adicionar_janelas_grupo(
+    linhas: &mut Vec<String>,
+    grupo: &Grupo,
+    prefixo: &str,
+    fallback: &str,
+    agora: DateTime<Local>,
+) {
+    let j_5h = grupo.janelas.iter().find(|j| j.rotulo == "5h");
+    let j_sem = grupo.janelas.iter().find(|j| j.rotulo == "Semana");
+    if let Some(j) = j_5h {
+        linhas.push(format_item_coluna(&format!("{prefixo} 5h"), j, agora));
+    }
+    if let Some(j) = j_sem {
+        linhas.push(format_item_coluna(&format!("{prefixo} Sem"), j, agora));
+    }
+    if j_5h.is_none() && j_sem.is_none() {
+        if let Some(j) = grupo.janelas.first() {
+            linhas.push(format_item_coluna(fallback, j, agora));
+        }
+    }
+}
+
 fn colunas_antigravity(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
     if let Some(erro) = &p.erro {
         let curto: String = erro.chars().take(COL_LARGURA).collect();
@@ -1081,7 +1121,7 @@ fn colunas_antigravity(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
     if let Some(g_argon) = p
         .grupos
         .iter()
-        .find(|g| g.nome.contains("Argon") && !g.nome.contains("API"))
+        .find(|g| nome_contem(&g.nome, "argon") && !g.nome.contains("API"))
     {
         if let Some(j) = g_argon.janelas.first() {
             linhas.push(format_item_coluna("Argon Sem", j, agora));
@@ -1095,28 +1135,43 @@ fn colunas_antigravity(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
         }
     }
 
-    // 3. Flash / Pro
-    if let Some(g_flash) = p.grupos.iter().find(|g| g.nome.contains("Flash")) {
-        let j_5h = g_flash.janelas.iter().find(|j| j.rotulo == "5h");
-        let j_sem = g_flash.janelas.iter().find(|j| j.rotulo == "Semana");
-        if let Some(j) = j_5h {
-            linhas.push(format_item_coluna("Flash 5h", j, agora));
-        }
-        if let Some(j) = j_sem {
-            linhas.push(format_item_coluna("Flash Sem", j, agora));
-        }
-        if j_5h.is_none() && j_sem.is_none() {
-            if let Some(j) = g_flash.janelas.first() {
-                linhas.push(format_item_coluna("Flash/Pro", j, agora));
-            }
-        }
+    // 3. Hydrogen isolado (caso venha separado do Flash)
+    if let Some(g_hydro) = p
+        .grupos
+        .iter()
+        .find(|g| nome_contem(&g.nome, "hydrogen") && !nome_contem(&g.nome, "flash"))
+    {
+        adicionar_janelas_grupo(&mut linhas, g_hydro, "Hydro", "Hydro", agora);
     }
 
-    // 4. Claude / GPT
+    // 4. Hydrogen compartilhado com Flash
+    if let Some(g_hf) = p
+        .grupos
+        .iter()
+        .find(|g| nome_contem(&g.nome, "hydrogen") && nome_contem(&g.nome, "flash"))
+    {
+        adicionar_janelas_grupo(&mut linhas, g_hf, "Hyd/Fl", "Hydro/Fl", agora);
+    }
+
+    // 5. Flash / Pro (sem Hydrogen)
+    if let Some(g_flash) = p
+        .grupos
+        .iter()
+        .find(|g| nome_contem(&g.nome, "flash") && !nome_contem(&g.nome, "hydrogen"))
+    {
+        let fallback = if nome_contem(&g_flash.nome, "pro") {
+            "Flash/Pro"
+        } else {
+            "Flash"
+        };
+        adicionar_janelas_grupo(&mut linhas, g_flash, "Flash", fallback, agora);
+    }
+
+    // 6. Claude / GPT
     if let Some(g_claude) = p
         .grupos
         .iter()
-        .find(|g| g.nome.contains("Claude") || g.nome.contains("GPT"))
+        .find(|g| nome_contem(&g.nome, "claude") || nome_contem(&g.nome, "gpt"))
     {
         let j = g_claude
             .janelas
@@ -1130,10 +1185,11 @@ fn colunas_antigravity(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
 
     // Fallback para outros grupos desconhecidos
     for g in &p.grupos {
-        let eh_conhecido = g.nome.contains("Argon")
-            || g.nome.contains("Flash")
-            || g.nome.contains("Claude")
-            || g.nome.contains("GPT");
+        let eh_conhecido = nome_contem(&g.nome, "argon")
+            || nome_contem(&g.nome, "hydrogen")
+            || nome_contem(&g.nome, "flash")
+            || nome_contem(&g.nome, "claude")
+            || nome_contem(&g.nome, "gpt");
         if !eh_conhecido && !g.nome.is_empty() {
             if let Some(j) = g.janelas.first() {
                 let rotulo: String = g.nome.chars().take(10).collect();
@@ -1750,5 +1806,92 @@ sys.stdin.read()
         assert!(card.iter().any(|l| l.contains("Flash Sem")));
         assert!(card.iter().any(|l| l.contains("Argon Sem")));
         assert!(card.iter().any(|l| l.contains("Argon API")));
+    }
+
+    const QUOTA_HYDROGEN: &str = r#"{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[
+        {"name":"Claude and GPT models","description":"Models within this group: Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B","buckets":[
+            {"window":"weekly","remaining_fraction":0,"reset_time":"2026-11-16T12:00:00Z"},
+            {"window":"5h","remaining_fraction":1,"reset_time":"2026-11-15T17:00:00Z"}]},
+        {"name":"Gemini Models","description":"Models within this group: Gemini 4 Hydrogen, Gemini 3.8 Flash","buckets":[
+            {"window":"weekly","remaining_fraction":0.98,"reset_time":"2026-11-21T15:00:00Z"},
+            {"window":"5h","remaining_fraction":0.96,"reset_time":"2026-11-15T16:34:00Z"}]},
+        {"name":"Gemini 4 Argon","description":"For paid Pro plans, Argon quota is separate.","buckets":[
+            {"window":"weekly","remaining_fraction":1,"reset_time":"2026-11-22T12:00:00Z"}]}]}}}"#;
+
+    #[test]
+    fn test_ler_antigravity_ordena_hydrogen() {
+        let p = ler_antigravity(QUOTA_HYDROGEN);
+        assert_eq!(p.erro, None);
+        let nomes: Vec<&str> = p.grupos.iter().map(|g| g.nome.as_str()).collect();
+        assert_eq!(
+            nomes,
+            [
+                "Gemini 4 Argon",
+                "Gemini 4 Hydrogen, Gemini 3.8 Flash",
+                "Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B",
+            ]
+        );
+        let hf = &p.grupos[1].janelas;
+        assert_eq!((hf[0].rotulo.as_str(), hf[0].usado), ("5h", 4));
+        assert_eq!((hf[1].rotulo.as_str(), hf[1].usado), ("Semana", 2));
+    }
+
+    #[test]
+    fn test_card_exibe_hydrogen_compartilhado_e_largura_constante() {
+        let agora = em(2026, 11, 15, 11, 40);
+        let cotas = Cotas {
+            claude: ler_claude(USAGE, agora),
+            antigravity: ler_antigravity(QUOTA_HYDROGEN),
+            chatgpt: ler_chatgpt(CHATGPT),
+            lido_em: agora.timestamp(),
+        };
+
+        let card = renderizar_card(Some(&cotas), agora);
+        let larguras: HashSet<usize> = card.iter().map(|l| largura_visivel(l)).collect();
+        assert_eq!(
+            larguras.len(),
+            1,
+            "largura inconsistente com Hydrogen: {card:#?}"
+        );
+        assert!(card.iter().any(|l| l.contains("Argon Sem")));
+        assert!(card.iter().any(|l| l.contains("Hyd/Fl 5h")));
+        assert!(card.iter().any(|l| l.contains("Hyd/Fl Sem")));
+        assert!(card.iter().any(|l| l.contains("Claude/GPT")));
+        assert!(!card.iter().any(|l| l.contains("Flash 5h")));
+        assert!(!card.iter().any(|l| l.contains('…')));
+    }
+
+    #[test]
+    fn test_card_exibe_hydrogen_isolado_sem_truncar() {
+        let agora = em(2026, 11, 15, 11, 40);
+        let quota_isolado = r#"{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[
+            {"name":"Gemini 4 Argon","description":"For paid Pro plans, Argon quota is separate.","buckets":[
+                {"window":"weekly","remaining_fraction":1,"reset_time":"2026-11-22T12:00:00Z"}]},
+            {"name":"Gemini 4 Hydrogen","description":"Models within this group: Gemini 4 Hydrogen","buckets":[
+                {"window":"5h","remaining_fraction":0.75,"reset_time":"2026-11-15T16:34:00Z"},
+                {"window":"weekly","remaining_fraction":0.90,"reset_time":"2026-11-21T15:00:00Z"}]},
+            {"name":"Gemini Flash","description":"Models within this group: Gemini 3.8 Flash","buckets":[
+                {"window":"5h","remaining_fraction":0.95,"reset_time":"2026-11-15T16:34:00Z"},
+                {"window":"weekly","remaining_fraction":0.98,"reset_time":"2026-11-21T15:00:00Z"}]}]}}}"#;
+        let cotas = Cotas {
+            claude: ler_claude(USAGE, agora),
+            antigravity: ler_antigravity(quota_isolado),
+            chatgpt: ler_chatgpt(CHATGPT),
+            lido_em: agora.timestamp(),
+        };
+
+        let card = renderizar_card(Some(&cotas), agora);
+        let larguras: HashSet<usize> = card.iter().map(|l| largura_visivel(l)).collect();
+        assert_eq!(
+            larguras.len(),
+            1,
+            "largura inconsistente com Hydrogen isolado: {card:#?}"
+        );
+        assert!(card.iter().any(|l| l.contains("Hydro 5h")));
+        assert!(card.iter().any(|l| l.contains("Hydro Sem")));
+        assert!(card.iter().any(|l| l.contains("Flash 5h")));
+        assert!(card.iter().any(|l| l.contains("Flash Sem")));
+        assert!(!card.iter().any(|l| l.contains("Gemini 4 H")));
+        assert!(!card.iter().any(|l| l.contains('…')));
     }
 }
