@@ -1,20 +1,10 @@
 {
   "provedores": [
-    "edge",
-    "elevenlabs",
-    "openai"
+    "edge"
   ],
   "edge": {
     "voz": "pt-BR-ThalitaMultilingualNeural",
     "velocidade": "+0%"
-  },
-  "elevenlabs": {
-    "modelo": "eleven_turbo_v2_5",
-    "voz_id": "21m00Tcm4TlvDq8ikWAM"
-  },
-  "openai": {
-    "modelo": "tts-1",
-    "voz": "nova"
   },
   "reserva": {
     "voz": "Luciana"

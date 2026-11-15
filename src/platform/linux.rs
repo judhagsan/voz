@@ -1,60 +1,9 @@
-use std::fs::{self, File};
+use std::fs::File;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::process::Command;
 
 pub const VOZ_RESERVA_PADRAO: &str = "pt-br";
-
-pub fn ler_segredo(servico: &str) -> Result<String, String> {
-    // 1. Variável de ambiente (ex: GEMINI_API_KEY)
-    let env_var = servico.to_uppercase().replace('-', "_");
-    if let Ok(val) = std::env::var(&env_var) {
-        let trimmed = val.trim().to_string();
-        if !trimmed.is_empty() {
-            return Ok(trimmed);
-        }
-    }
-
-    // 2. Secret Service API via secret-tool (GNOME Keyring / KWallet)
-    if let Ok(saida) = Command::new("secret-tool")
-        .args(["lookup", "service", servico])
-        .output()
-    {
-        if saida.status.success() {
-            let chave = String::from_utf8_lossy(&saida.stdout).trim().to_string();
-            if !chave.is_empty() {
-                return Ok(chave);
-            }
-        }
-    }
-
-    // 3. Arquivo de credenciais seguro em ~/.config/voz/credentials ou ~/.config/voz/<servico>
-    if let Some(home) = super::pasta_usuario() {
-        let conf_dir = home.join(".config").join("voz");
-        let arquivo_servico = conf_dir.join(servico);
-        if let Ok(conteudo) = fs::read_to_string(&arquivo_servico) {
-            let chave = conteudo.trim().to_string();
-            if !chave.is_empty() {
-                return Ok(chave);
-            }
-        }
-        let arquivo_geral = conf_dir.join("credentials");
-        if let Ok(conteudo) = fs::read_to_string(&arquivo_geral) {
-            for linha in conteudo.lines() {
-                if let Some((chave, valor)) = linha.split_once('=') {
-                    if chave.trim() == servico {
-                        let v = valor.trim().to_string();
-                        if !v.is_empty() {
-                            return Ok(v);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Err(format!("sem chave configurada para {servico}"))
-}
 
 pub fn falar_reserva(voz: &str, texto: &str) {
     let status_spd = Command::new("spd-say").args(["-l", voz, texto]).status();

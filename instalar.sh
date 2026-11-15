@@ -83,11 +83,11 @@ elif [ "$SO" = "Linux" ]; then
   echo "==> Verificando dependências no Linux..."
   if command -v apt-get >/dev/null 2>&1; then
     sudo apt-get update -qq || true
-    sudo apt-get install -y -qq tmux gh libasound2-dev build-essential speech-dispatcher || true
+    sudo apt-get install -y -qq tmux gh build-essential speech-dispatcher || true
   elif command -v dnf >/dev/null 2>&1; then
-    sudo dnf install -y tmux gh alsa-lib-devel gcc speech-dispatcher || true
+    sudo dnf install -y tmux gh gcc speech-dispatcher || true
   elif command -v pacman >/dev/null 2>&1; then
-    sudo pacman -Sy --noconfirm tmux github-cli alsa-lib base-devel speech-dispatcher || true
+    sudo pacman -Sy --noconfirm tmux github-cli base-devel speech-dispatcher || true
   fi
 
   if ! command -v cargo >/dev/null 2>&1; then
@@ -169,42 +169,10 @@ echo ""
 if [ "$SO" = "Darwin" ]; then
   echo "==> Configuração de Provedores de Voz (macOS):"
   echo "    [✓] Edge-TTS (Thalita): pronto para uso em alta fidelidade sem chaves de API."
-
-  if [ -n "${ELEVENLABS_API_KEY:-}" ] || security find-generic-password -s elevenlabs-api-key >/dev/null 2>&1; then
-    echo "    [✓] ElevenLabs: chave configurada."
-  else
-    echo "    [-] ElevenLabs (opcional): https://elevenlabs.io"
-    echo "        export ELEVENLABS_API_KEY=\"SUA_CHAVE\" ou:"
-    echo "        security add-generic-password -a \"$USER\" -s elevenlabs-api-key -w \"SUA_CHAVE\""
-  fi
-
-  if [ -n "${OPENAI_API_KEY:-}" ] || security find-generic-password -s openai-api-key >/dev/null 2>&1; then
-    echo "    [✓] OpenAI: chave configurada."
-  else
-    echo "    [-] OpenAI (opcional): https://platform.openai.com/api-keys"
-    echo "        export OPENAI_API_KEY=\"SUA_CHAVE\" ou:"
-    echo "        security add-generic-password -a \"$USER\" -s openai-api-key -w \"SUA_CHAVE\""
-  fi
-
   echo "    [✓] Voz de reserva nativa (Luciana): pronta para uso offline sem chaves."
 else
   echo "==> Configuração de Provedores de Voz (Linux):"
   echo "    [✓] Edge-TTS (Thalita): pronto para uso em alta fidelidade sem chaves de API."
-
-  if [ -n "${ELEVENLABS_API_KEY:-}" ] || [ -f "$HOME/.config/voz/elevenlabs-api-key" ] || (command -v secret-tool >/dev/null 2>&1 && secret-tool lookup service elevenlabs-api-key >/dev/null 2>&1); then
-    echo "    [✓] ElevenLabs: chave configurada."
-  else
-    echo "    [-] ElevenLabs (opcional): https://elevenlabs.io"
-    echo "        export ELEVENLABS_API_KEY=\"SUA_CHAVE\""
-  fi
-
-  if [ -n "${OPENAI_API_KEY:-}" ] || [ -f "$HOME/.config/voz/openai-api-key" ] || (command -v secret-tool >/dev/null 2>&1 && secret-tool lookup service openai-api-key >/dev/null 2>&1); then
-    echo "    [✓] OpenAI: chave configurada."
-  else
-    echo "    [-] OpenAI (opcional): https://platform.openai.com/api-keys"
-    echo "        export OPENAI_API_KEY=\"SUA_CHAVE\""
-  fi
-
   echo "    [✓] Síntese offline (speech-dispatcher / espeak-ng): pronta para uso offline sem chaves."
 fi
 

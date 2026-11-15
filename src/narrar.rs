@@ -51,21 +51,11 @@ fn palavras_da_fala(cfg: &serde_json::Value) -> usize {
         .unwrap_or(40) as usize
 }
 
-/// Escreve a fala da narração: um resumo do Gemini; sem chave ou sem rede, o
-/// começo da resposta, cortado no mesmo tamanho.
-pub fn montar_fala(base: &Path, projeto: &str, pedido: &str, resposta: &str) -> String {
+/// Extrai localmente a fala da narração a partir do começo da resposta.
+pub fn montar_fala(base: &Path, projeto: &str, resposta: &str) -> String {
     let cfg = crate::fala::ler_config(base);
     let palavras = palavras_da_fala(&cfg);
-    let gemini = crate::gemini::Config::de_json(cfg.get("gemini"));
-    match crate::resumo::resumir(&gemini, palavras, projeto, pedido, resposta, 20) {
-        Ok(fala) => fala,
-        Err(e) => {
-            if std::env::var("VOZ_DEBUG").is_ok() {
-                eprintln!("[voz] resumo indisponível ({e}); lendo o começo da resposta.");
-            }
-            extrair_resumo_direto(resposta, projeto, palavras)
-        }
-    }
+    extrair_resumo_direto(resposta, projeto, palavras)
 }
 
 fn dados_do_turno(
@@ -140,7 +130,7 @@ pub fn tentar_narrar(
             })
     });
 
-    let (inicio, pedido, resposta) = dados_do_turno(&val, transcript_override);
+    let (inicio, _pedido, resposta) = dados_do_turno(&val, transcript_override);
 
     if min_segundos > 0.0 {
         if let Some(ini) = inicio {
@@ -160,7 +150,7 @@ pub fn tentar_narrar(
     };
 
     let projeto = nome_do_projeto(cwd_path.as_deref());
-    let fala = montar_fala(base, &projeto, &pedido, &resposta_texto);
+    let fala = montar_fala(base, &projeto, &resposta_texto);
     if fala.trim().is_empty() {
         return false;
     }
