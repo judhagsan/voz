@@ -79,11 +79,13 @@ Exibir também os repositórios sem pendências no momento:
 voz -t
 ```
 
-Modo contínuo ao vivo (atualiza a cada segundo, ideal para rodar no tmux):
+Modo contínuo ao vivo (atualiza a cada segundo por padrão; aceita intervalo em segundos, como `voz -w 2`, ideal para rodar no tmux):
 
 ```zsh
 voz -w
 ```
+
+As barras de cota mostram o percentual usado nas janelas de `5h` e semanal (`Sem`), usando rótulos compactos (como `N/H/F` e `Hyd/Fl`) quando múltiplos modelos compartilham a mesma cota.
 
 ### Testar a fala
 
@@ -130,6 +132,6 @@ Caso o computador esteja sem conexão com a internet, o Voz recai automaticament
 
 Os arquivos de configuração ficam na raiz do repositório:
 
-- `config.json`: ordem dos provedores de voz, voz selecionada, velocidade e frases de aviso.
+- `config.json`: ordem dos provedores de voz, voz selecionada, velocidade, frases de aviso e opções de resumo falado (`narrar`).
 - `fonetica.json`: pronúncia de siglas e termos customizados.
 - `tmux.conf`: tema escuro Dracula e atalhos de divisão de painéis.
