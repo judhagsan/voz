@@ -230,16 +230,52 @@ fn nome_contem(nome: &str, termo_minusculo: &str) -> bool {
 }
 
 fn prioridade_grupo_antigravity(nome: &str) -> u8 {
+    let neon = nome_contem(nome, "neon");
+    let hydro = nome_contem(nome, "hydrogen");
+    let flash = nome_contem(nome, "flash");
     if nome_contem(nome, "argon") {
         0
-    } else if nome_contem(nome, "hydrogen") && !nome_contem(nome, "flash") {
+    } else if neon && !hydro && !flash {
         1
-    } else if nome_contem(nome, "hydrogen") || nome_contem(nome, "flash") {
+    } else if neon && hydro && !flash {
         2
-    } else if nome_contem(nome, "claude") || nome_contem(nome, "gpt") {
+    } else if neon && hydro && flash {
         3
-    } else {
+    } else if neon && flash {
         4
+    } else if hydro && !flash {
+        5
+    } else if hydro && flash {
+        6
+    } else if flash {
+        7
+    } else if nome_contem(nome, "claude") || nome_contem(nome, "gpt") {
+        8
+    } else {
+        9
+    }
+}
+
+fn rotulo_grupo_gemini(nome: &str) -> Option<(&'static str, &'static str)> {
+    let neon = nome_contem(nome, "neon");
+    let hydro = nome_contem(nome, "hydrogen");
+    let flash = nome_contem(nome, "flash");
+    match (neon, hydro, flash) {
+        (true, false, false) => Some(("Neon", "Neon")),
+        (true, true, false) => Some(("Neo/Hy", "Neo/Hyd")),
+        (true, true, true) => Some(("N/H/F", "N/H/F")),
+        (true, false, true) => Some(("Neo/Fl", "Neo/Fl")),
+        (false, true, false) => Some(("Hydro", "Hydro")),
+        (false, true, true) => Some(("Hyd/Fl", "Hydro/Fl")),
+        (false, false, true) => {
+            let fallback = if nome_contem(nome, "pro") {
+                "Flash/Pro"
+            } else {
+                "Flash"
+            };
+            Some(("Flash", fallback))
+        }
+        (false, false, false) => None,
     }
 }
 
@@ -297,7 +333,7 @@ pub fn ler_antigravity(json: &str) -> Provedor {
         janelas.sort_by_key(|j| j.rotulo != "5h");
         grupos.push(Grupo { nome, janelas });
     }
-    // Mantém Argon no topo seguido por Hydrogen/Flash e pelos modelos Claude/GPT.
+    // Mantém Argon no topo seguido por Neon/Hydrogen/Flash e pelos modelos Claude/GPT.
     grupos.sort_by_key(|g| prioridade_grupo_antigravity(&g.nome));
     Provedor {
         grupos,
@@ -1130,39 +1166,21 @@ fn colunas_antigravity(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
         }
     }
 
-    // 3. Hydrogen isolado (caso venha separado do Flash)
-    if let Some(g_hydro) = p
+    // 3. Grupos Gemini (Neon, Hydrogen, Flash e combinações compartilhadas)
+    let mut grupos_gemini: Vec<(&Grupo, &str, &str)> = p
         .grupos
         .iter()
-        .find(|g| nome_contem(&g.nome, "hydrogen") && !nome_contem(&g.nome, "flash"))
-    {
-        adicionar_janelas_grupo(&mut linhas, g_hydro, "Hydro", "Hydro", agora);
+        .filter(|g| !nome_contem(&g.nome, "argon") && !g.nome.contains("API"))
+        .filter_map(|g| {
+            rotulo_grupo_gemini(&g.nome).map(|(prefixo, fallback)| (g, prefixo, fallback))
+        })
+        .collect();
+    grupos_gemini.sort_by_key(|(g, _, _)| prioridade_grupo_antigravity(&g.nome));
+    for (g, prefixo, fallback) in grupos_gemini {
+        adicionar_janelas_grupo(&mut linhas, g, prefixo, fallback, agora);
     }
 
-    // 4. Hydrogen compartilhado com Flash
-    if let Some(g_hf) = p
-        .grupos
-        .iter()
-        .find(|g| nome_contem(&g.nome, "hydrogen") && nome_contem(&g.nome, "flash"))
-    {
-        adicionar_janelas_grupo(&mut linhas, g_hf, "Hyd/Fl", "Hydro/Fl", agora);
-    }
-
-    // 5. Flash / Pro (sem Hydrogen)
-    if let Some(g_flash) = p
-        .grupos
-        .iter()
-        .find(|g| nome_contem(&g.nome, "flash") && !nome_contem(&g.nome, "hydrogen"))
-    {
-        let fallback = if nome_contem(&g_flash.nome, "pro") {
-            "Flash/Pro"
-        } else {
-            "Flash"
-        };
-        adicionar_janelas_grupo(&mut linhas, g_flash, "Flash", fallback, agora);
-    }
-
-    // 6. Claude / GPT
+    // 4. Claude / GPT
     if let Some(g_claude) = p
         .grupos
         .iter()
@@ -1181,8 +1199,8 @@ fn colunas_antigravity(p: &Provedor, agora: DateTime<Local>) -> Vec<String> {
     // Fallback para outros grupos desconhecidos
     for g in &p.grupos {
         let eh_conhecido = nome_contem(&g.nome, "argon")
-            || nome_contem(&g.nome, "hydrogen")
-            || nome_contem(&g.nome, "flash")
+            || g.nome.contains("API")
+            || rotulo_grupo_gemini(&g.nome).is_some()
             || nome_contem(&g.nome, "claude")
             || nome_contem(&g.nome, "gpt");
         if !eh_conhecido && !g.nome.is_empty() {
@@ -1936,5 +1954,116 @@ sys.stdin.read()
         assert!(card.iter().any(|l| l.contains("Flash Sem")));
         assert!(!card.iter().any(|l| l.contains("Gemini 4 H")));
         assert!(!card.iter().any(|l| l.contains('…')));
+    }
+
+    const QUOTA_NEON: &str = r#"{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[
+        {"name":"Claude and GPT models","description":"Models within this group: Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B","buckets":[
+            {"window":"weekly","remaining_fraction":1,"reset_time":"2026-11-25T22:01:08Z"},
+            {"window":"5h","remaining_fraction":1,"reset_time":"2026-11-19T03:01:08Z"}]},
+        {"name":"Gemini Models","description":"Models within this group: Gemini 4 Neon, Gemini 4 Hydrogen, Orchestrator (Neon), Gemini 3.8 Flash","buckets":[
+            {"window":"weekly","remaining_fraction":0.97,"reset_time":"2026-11-25T21:53:22Z"},
+            {"window":"5h","remaining_fraction":0.92,"reset_time":"2026-11-19T02:53:22Z"}]},
+        {"name":"Gemini 4 Argon","description":"For paid Pro plans, Argon quota is separate.","buckets":[
+            {"window":"weekly","remaining_fraction":1,"reset_time":"2026-11-25T22:01:08Z"}]}]}}}"#;
+
+    #[test]
+    fn test_ler_antigravity_ordena_neon() {
+        let p = ler_antigravity(QUOTA_NEON);
+        assert_eq!(p.erro, None);
+        let nomes: Vec<&str> = p.grupos.iter().map(|g| g.nome.as_str()).collect();
+        assert_eq!(
+            nomes,
+            [
+                "Gemini 4 Argon",
+                "Gemini 4 Neon, Gemini 4 Hydrogen, Orchestrator (Neon), Gemini 3.8 Flash",
+                "Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B",
+            ]
+        );
+        let nhf = &p.grupos[1].janelas;
+        assert_eq!((nhf[0].rotulo.as_str(), nhf[0].usado), ("5h", 8));
+        assert_eq!((nhf[1].rotulo.as_str(), nhf[1].usado), ("Semana", 3));
+    }
+
+    #[test]
+    fn test_card_exibe_neon_compartilhado_e_largura_constante() {
+        let agora = em(2026, 11, 18, 19, 0);
+        let cotas = Cotas {
+            claude: ler_claude(USAGE, agora),
+            antigravity: ler_antigravity(QUOTA_NEON),
+            chatgpt: ler_chatgpt(CHATGPT),
+            lido_em: agora.timestamp(),
+        };
+
+        let card = renderizar_card(Some(&cotas), agora);
+        let larguras: HashSet<usize> = card.iter().map(|l| largura_visivel(l)).collect();
+        assert_eq!(
+            larguras.len(),
+            1,
+            "largura inconsistente com Neon: {card:#?}"
+        );
+        assert!(card.iter().any(|l| l.contains("Argon Sem")));
+        assert!(card.iter().any(|l| l.contains("N/H/F 5h")));
+        assert!(card.iter().any(|l| l.contains("N/H/F Sem")));
+        assert!(card.iter().any(|l| l.contains("Claude/GPT")));
+        assert!(!card.iter().any(|l| l.contains("Hyd/Fl")));
+        assert!(!card.iter().any(|l| l.contains("Flash 5h")));
+        assert!(!card.iter().any(|l| l.contains('…')));
+    }
+
+    #[test]
+    fn test_card_exibe_neon_isolado_sem_truncar() {
+        let agora = em(2026, 11, 18, 19, 0);
+        let quota_isolado = r#"{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[
+            {"name":"Gemini Flash","description":"Models within this group: Gemini 3.8 Flash","buckets":[
+                {"window":"5h","remaining_fraction":0.95,"reset_time":"2026-11-19T02:53:22Z"},
+                {"window":"weekly","remaining_fraction":0.98,"reset_time":"2026-11-25T21:53:22Z"}]},
+            {"name":"Gemini 4 Neon","description":"Models within this group: Gemini 4 Neon, Orchestrator (Neon)","buckets":[
+                {"window":"5h","remaining_fraction":0.80,"reset_time":"2026-11-19T02:53:22Z"},
+                {"window":"weekly","remaining_fraction":0.90,"reset_time":"2026-11-25T21:53:22Z"}]},
+            {"name":"Gemini 4 Argon","description":"For paid Pro plans, Argon quota is separate.","buckets":[
+                {"window":"weekly","remaining_fraction":1,"reset_time":"2026-11-25T22:01:08Z"}]},
+            {"name":"Gemini 4 Hydrogen","description":"Models within this group: Gemini 4 Hydrogen","buckets":[
+                {"window":"5h","remaining_fraction":0.75,"reset_time":"2026-11-19T02:53:22Z"},
+                {"window":"weekly","remaining_fraction":0.88,"reset_time":"2026-11-25T21:53:22Z"}]}]}}}"#;
+        let cotas = Cotas {
+            claude: ler_claude(USAGE, agora),
+            antigravity: ler_antigravity(quota_isolado),
+            chatgpt: ler_chatgpt(CHATGPT),
+            lido_em: agora.timestamp(),
+        };
+
+        let card = renderizar_card(Some(&cotas), agora);
+        let larguras: HashSet<usize> = card.iter().map(|l| largura_visivel(l)).collect();
+        assert_eq!(
+            larguras.len(),
+            1,
+            "largura inconsistente com Neon isolado: {card:#?}"
+        );
+        let pos_argon = card.iter().position(|l| l.contains("Argon Sem")).unwrap();
+        let pos_neon = card.iter().position(|l| l.contains("Neon 5h")).unwrap();
+        let pos_hydro = card.iter().position(|l| l.contains("Hydro 5h")).unwrap();
+        let pos_flash = card.iter().position(|l| l.contains("Flash 5h")).unwrap();
+        assert!(pos_argon < pos_neon && pos_neon < pos_hydro && pos_hydro < pos_flash);
+        assert!(card.iter().any(|l| l.contains("Neon Sem")));
+        assert!(card.iter().any(|l| l.contains("Hydro Sem")));
+        assert!(card.iter().any(|l| l.contains("Flash Sem")));
+        assert!(!card.iter().any(|l| l.contains("Gemini 4 N")));
+        assert!(!card.iter().any(|l| l.contains('…')));
+    }
+
+    #[test]
+    fn test_rotulo_grupo_gemini_pares_com_neon() {
+        assert_eq!(
+            rotulo_grupo_gemini("Gemini 4 Neon, Gemini 4 Hydrogen"),
+            Some(("Neo/Hy", "Neo/Hyd"))
+        );
+        assert_eq!(
+            rotulo_grupo_gemini("Gemini 4 Neon, Gemini 3.8 Flash"),
+            Some(("Neo/Fl", "Neo/Fl"))
+        );
+        assert_eq!(
+            rotulo_grupo_gemini("Gemini 4 Neon, Gemini 4 Hydrogen, Gemini 3.8 Flash"),
+            Some(("N/H/F", "N/H/F"))
+        );
     }
 }
